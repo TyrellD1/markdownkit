@@ -46,24 +46,31 @@ npm run dev
 
 Expected:
 
-- Overlay traffic lights on a cream (or dark) page
+- Overlay traffic lights on a cream (or dark) page, with a thin 36px chrome
 - Empty state titled **markdownkit**
+- No document title in the top bar
 - `⌘O` or the **Open a file** button opens a native picker
+- **MarkdownKit → Settings…** (`⌘,`) opens appearance + live reload
 
-Open `examples/welcome.md`.
+Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, and links.
 
 ### Visual checklist
 
 - [ ] Serif H1, sans body, ~720px column
-- [ ] Frontmatter `title` / `author` shown as a quiet property list
+- [ ] Frontmatter shown as a quiet property list
 - [ ] Checked / unchecked task boxes
 - [ ] Table, blockquote, inline code, fenced `rust` block
-- [ ] SVG image at the bottom
-- [ ] Window title / top chrome shows `Welcome to MarkdownKit`
+- [ ] SVG image
+- [ ] Top bar is only traffic lights + back/forward arrows
 
 ### Interaction checklist
 
 - [ ] Click **the linked note** → `examples/linked.md` opens
+- [ ] **Back** / **Forward** (or `⌘[` / `⌘]`) walk that history
+- [ ] **File → Open in Finder** reveals the current file
+- [ ] **File → Copy File Path** copies the path
+- [ ] Settings can force light, dark, or system
+- [ ] Turning off live reload stops disk updates; turning it on restores them
 - [ ] In-page `#` links still scroll when present
 - [ ] `https://` links leave the app (default browser)
 - [ ] Drop `examples/welcome.md` onto the window

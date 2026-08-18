@@ -11,7 +11,10 @@ MarkdownKit is a **viewer**. Open a `.md` file, read it, click a link, go back t
 - Opens local markdown (`.md`, `.markdown`, `.mdown`, `.mkd`)
 - Renders GFM basics: headings, lists, task lists, tables, strike, footnotes, fenced code
 - Resolves relative images and in-app links to other markdown files
-- Reloads when the open file changes on disk
+- Reloads when the open file changes on disk (optional, in Settings)
+- Dark / light / system appearance from **MarkdownKit → Settings…**
+- Back / forward when following local markdown links
+- **File → Open in Finder** and **Copy File Path**
 - Registers as a macOS viewer so Finder can double-click `.md` files into the app
 - Uses no web fonts, no JS markdown parser, and no animation loop
 
@@ -33,7 +36,7 @@ npm test
 npm run dev
 ```
 
-Then **File → Open** (`⌘O`) and choose `examples/welcome.md`. You can also drop a markdown file onto the window.
+Then **File → Open** (`⌘O`) and choose `examples/welcome.md` or `examples/kitchen-sink.md`. You can also drop a markdown file onto the window.
 
 To build the `.app`:
 
@@ -58,10 +61,10 @@ Until that default is set, you can still **Open With → MarkdownKit**.
 | Check | How |
 | --- | --- |
 | Unit tests | `npm test` (or `cargo test --manifest-path src-tauri/Cargo.toml`) |
-| Visual layout | `npm run dev`, open `examples/welcome.md` |
-| Relative links | Click “the linked note” in the welcome file |
+| Visual layout | `npm run dev`, open `examples/welcome.md` or `examples/kitchen-sink.md` |
+| Relative links | Click “the linked note”, then **Back** |
 | Relative images | Confirm the `markdownkit` SVG at the bottom of welcome |
-| Live reload | Edit `examples/welcome.md` in another editor; the viewer should refresh |
+| Live reload | Leave Settings on, then edit the open file |
 | External links | Click `https://` links; they open in the default browser |
 | Finder | Build the app, then Open With / double-click a `.md` file |
 

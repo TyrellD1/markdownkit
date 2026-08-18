@@ -558,4 +558,21 @@ mod tests {
         assert!(doc.html.contains("/__mk__/open?path="));
         assert!(doc.frontmatter.iter().any(|field| field.key == "author"));
     }
+
+    #[test]
+    fn kitchen_sink_renders_gfm_shapes() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/kitchen-sink.md");
+        let source = std::fs::read_to_string(&path).expect("kitchen-sink.md");
+        let doc = render(&source, &path);
+        assert_eq!(doc.title, "Kitchen sink");
+        assert!(doc.html.contains("<table>"));
+        assert!(doc.html.contains("type=\"checkbox\""));
+        assert!(doc.html.contains("<blockquote>"));
+        assert!(doc.html.contains("<pre>"));
+        assert!(doc.html.contains("id=\"custom-id\""));
+        assert!(doc.html.contains("footnote") || doc.html.contains("Footnotes"));
+        assert!(doc.html.contains("/__mk__/open?path="));
+        assert!(doc.html.contains("asset://localhost/"));
+        assert!(doc.html.contains("https://example.com"));
+    }
 }

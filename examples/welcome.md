@@ -31,6 +31,6 @@ let ideas = progress();
 | Native parse | Almost no CPU while idle |
 | Finder open | Double-click a `.md` file |
 
-See also [the linked note](./linked.md#more).
+See also [the linked note](./linked.md#more) and the [kitchen sink](./kitchen-sink.md).
 
 ![Mark](./images/mark.svg)

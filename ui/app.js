@@ -1,37 +1,125 @@
+const THEME_KEY = "markdownkit.theme";
+const RELOAD_KEY = "markdownkit.liveReload";
+
 const emptyEl = document.getElementById("empty");
 const pageEl = document.getElementById("page");
 const contentEl = document.getElementById("content");
 const propsEl = document.getElementById("props");
-const titleEl = document.getElementById("chrome-title");
 const toastEl = document.getElementById("toast");
 const openButton = document.getElementById("open-button");
+const backButton = document.getElementById("back");
+const forwardButton = document.getElementById("forward");
+const settingsEl = document.getElementById("settings");
+const liveReloadEl = document.getElementById("live-reload");
 
 let currentPath = null;
 let toastTimer = 0;
+const historyStack = [];
+let historyIndex = -1;
 
 function api() {
   return window.__TAURI__;
 }
 
-async function openPath(path) {
+function currentTheme() {
+  return document.documentElement.dataset.theme || "system";
+}
+
+function applyTheme(theme) {
+  const next = ["system", "light", "dark"].includes(theme) ? theme : "system";
+  document.documentElement.dataset.theme = next;
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    /* ignore */
+  }
+  for (const button of document.querySelectorAll(".seg [data-theme]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.theme === next));
+  }
+}
+
+function liveReloadEnabled() {
+  try {
+    const stored = localStorage.getItem(RELOAD_KEY);
+    return stored === null ? true : stored === "true";
+  } catch {
+    return true;
+  }
+}
+
+async function persistLiveReload(enabled) {
+  try {
+    localStorage.setItem(RELOAD_KEY, String(enabled));
+  } catch {
+    /* ignore */
+  }
+  await api().core.invoke("set_live_reload", { enabled });
+}
+
+function updateNav() {
+  backButton.disabled = historyIndex <= 0;
+  forwardButton.disabled = historyIndex < 0 || historyIndex >= historyStack.length - 1;
+}
+
+function pushHistory(path, hash = "") {
+  const entry = { path, hash: hash || "" };
+  const current = historyStack[historyIndex];
+  if (current && current.path === entry.path && current.hash === entry.hash) {
+    updateNav();
+    return;
+  }
+  historyStack.splice(historyIndex + 1);
+  historyStack.push(entry);
+  historyIndex = historyStack.length - 1;
+  updateNav();
+}
+
+async function openPath(path, options = {}) {
   if (!path) return;
+  const { fromHistory = false, hash = "", skipHistory = false } = options;
   try {
     const doc = await api().core.invoke("open_document", { path });
     currentPath = doc.path;
     renderDocument(doc);
+    if (hash) {
+      requestAnimationFrame(() => scrollToHash(hash));
+    }
+    if (!fromHistory && !skipHistory) {
+      pushHistory(doc.path, hash);
+    } else {
+      updateNav();
+    }
   } catch (error) {
     showToast(String(error));
   }
 }
 
+function scrollToHash(hash) {
+  const id = decodeURIComponent(String(hash).replace(/^#/, ""));
+  if (!id) return;
+  document.getElementById(id)?.scrollIntoView({ block: "start" });
+}
+
+function goBack() {
+  if (historyIndex <= 0) return;
+  historyIndex -= 1;
+  const entry = historyStack[historyIndex];
+  openPath(entry.path, { fromHistory: true, hash: entry.hash });
+}
+
+function goForward() {
+  if (historyIndex >= historyStack.length - 1) return;
+  historyIndex += 1;
+  const entry = historyStack[historyIndex];
+  openPath(entry.path, { fromHistory: true, hash: entry.hash });
+}
+
 function renderDocument(doc) {
   emptyEl.hidden = true;
   pageEl.hidden = false;
-  titleEl.textContent = doc.title || "markdownkit";
-  document.title = doc.title || "MarkdownKit";
+  document.title = "MarkdownKit";
   renderFrontmatter(doc.frontmatter || []);
   contentEl.innerHTML = doc.html || "";
-  contentEl.scrollTop = 0;
   document.getElementById("app").scrollTo(0, 0);
 }
 
@@ -59,7 +147,17 @@ function showToast(message) {
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => {
     toastEl.hidden = true;
-  }, 3200);
+  }, 2400);
+}
+
+function openSettings() {
+  liveReloadEl.checked = liveReloadEnabled();
+  applyTheme(currentTheme());
+  settingsEl.hidden = false;
+}
+
+function closeSettings() {
+  settingsEl.hidden = true;
 }
 
 async function pickFile() {
@@ -85,7 +183,7 @@ async function handleHref(href) {
   if (href.startsWith("/__mk__/open")) {
     const url = new URL(href, "https://markdownkit.local");
     const path = url.searchParams.get("path");
-    if (path) await openPath(decodeURIComponent(path));
+    if (path) await openPath(decodeURIComponent(path), { hash: url.hash });
     return true;
   }
   if (href.startsWith("/__mk__/external")) {
@@ -126,14 +224,54 @@ function bindDrop() {
   });
 }
 
+async function handleMenu(id) {
+  try {
+    if (id === "open") await pickFile();
+    if (id === "settings") openSettings();
+    if (id === "back") goBack();
+    if (id === "forward") goForward();
+    if (id === "reveal") await api().core.invoke("reveal_in_finder");
+    if (id === "copy-path") {
+      await api().core.invoke("copy_current_path");
+      showToast("Copied path");
+    }
+  } catch (error) {
+    showToast(String(error));
+  }
+}
+
 async function boot() {
+  applyTheme(currentTheme());
+  updateNav();
+
   if (!api()) {
     showToast("MarkdownKit needs the Tauri runtime.");
     return;
   }
 
+  liveReloadEl.checked = liveReloadEnabled();
+  await persistLiveReload(liveReloadEl.checked);
+
   openButton.addEventListener("click", () => {
     pickFile().catch((error) => showToast(String(error)));
+  });
+  backButton.addEventListener("click", goBack);
+  forwardButton.addEventListener("click", goForward);
+  document.getElementById("settings-done").addEventListener("click", closeSettings);
+  settingsEl.addEventListener("click", (event) => {
+    if (event.target === settingsEl) closeSettings();
+  });
+  liveReloadEl.addEventListener("change", () => {
+    persistLiveReload(liveReloadEl.checked).catch((error) => showToast(String(error)));
+  });
+  for (const button of document.querySelectorAll(".seg [data-theme]")) {
+    button.addEventListener("click", () => applyTheme(button.dataset.theme));
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !settingsEl.hidden) {
+      closeSettings();
+    }
   });
 
   document.addEventListener("click", async (event) => {
@@ -154,10 +292,12 @@ async function boot() {
   const listen = api().event.listen;
   await listen("open-file", (event) => openPath(event.payload?.path || event.payload));
   await listen("menu-open", () => pickFile());
+  await listen("menu", (event) => handleMenu(event.payload));
   await listen("file-changed", (event) => {
     const path = event.payload?.path || event.payload;
     if (path && path === currentPath) {
-      openPath(path);
+      const hash = historyStack[historyIndex]?.hash || "";
+      openPath(path, { skipHistory: true, hash });
     }
   });
 

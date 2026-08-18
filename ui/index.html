@@ -1,14 +1,33 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="system">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MarkdownKit</title>
+    <script>
+      try {
+        const theme = localStorage.getItem("markdownkit.theme") || "system";
+        document.documentElement.dataset.theme = theme;
+      } catch {
+        /* ignore */
+      }
+    </script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <header class="chrome" data-tauri-drag-region>
-      <p class="chrome-title" id="chrome-title">markdownkit</p>
+      <nav class="nav" id="nav" aria-label="History">
+        <button type="button" id="back" aria-label="Back" disabled>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M7.5 2.5 3.5 6l4 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button type="button" id="forward" aria-label="Forward" disabled>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M4.5 2.5 8.5 6l-4 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </nav>
     </header>
 
     <main id="app">
@@ -31,6 +50,28 @@
         <div class="content" id="content"></div>
       </article>
     </main>
+
+    <div class="modal" id="settings" hidden>
+      <div class="modal-card" role="dialog" aria-labelledby="settings-title">
+        <h2 id="settings-title">Settings</h2>
+
+        <div class="setting">
+          <p class="setting-label">Appearance</p>
+          <div class="seg" role="radiogroup" aria-label="Appearance">
+            <button type="button" data-theme="system">System</button>
+            <button type="button" data-theme="light">Light</button>
+            <button type="button" data-theme="dark">Dark</button>
+          </div>
+        </div>
+
+        <label class="setting toggle">
+          <input type="checkbox" id="live-reload" />
+          <span>Reload when the file changes on disk</span>
+        </label>
+
+        <button type="button" class="done" id="settings-done">Done</button>
+      </div>
+    </div>
 
     <p class="toast" id="toast" hidden></p>
     <script src="./app.js"></script>

@@ -1,4 +1,6 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -13,6 +15,7 @@ use crate::markdown::{self, RenderedDocument};
 pub struct AppState {
     pub current: Mutex<Option<PathBuf>>,
     pub pending: Mutex<Option<PathBuf>>,
+    live_reload: Mutex<bool>,
     watcher: Mutex<Option<RecommendedWatcher>>,
     last_emit: Mutex<Instant>,
 }
@@ -22,6 +25,7 @@ impl Default for AppState {
         Self {
             current: Mutex::new(None),
             pending: Mutex::new(None),
+            live_reload: Mutex::new(true),
             watcher: Mutex::new(None),
             last_emit: Mutex::new(Instant::now()
                 .checked_sub(Duration::from_secs(1))
@@ -41,6 +45,18 @@ impl AppState {
 
     pub fn set_current(&self, path: PathBuf) {
         *self.current.lock().expect("current lock") = Some(path);
+    }
+
+    fn current_path(&self) -> Result<PathBuf, String> {
+        self.current
+            .lock()
+            .expect("current lock")
+            .clone()
+            .ok_or_else(|| "Open a markdown file first.".into())
+    }
+
+    fn live_reload_enabled(&self) -> bool {
+        *self.live_reload.lock().expect("live reload lock")
     }
 }
 
@@ -110,8 +126,60 @@ pub fn open_path(
 
     allow_asset_access(app, &path);
     state.set_current(path.clone());
-    watch_current_file(app, state, path)?;
+    apply_watch(app, state, path)?;
     Ok(rendered)
+}
+
+#[tauri::command]
+pub fn set_live_reload(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    *state.live_reload.lock().expect("live reload lock") = enabled;
+    let current = state.current.lock().expect("current lock").clone();
+    match current {
+        Some(path) => apply_watch(&app, &state, path),
+        None => {
+            *state.watcher.lock().expect("watcher lock") = None;
+            Ok(())
+        }
+    }
+}
+
+#[tauri::command]
+pub fn reveal_in_finder(state: State<'_, AppState>) -> Result<(), String> {
+    let path = state.current_path()?;
+    let status = Command::new("open")
+        .args(["-R", &path.to_string_lossy()])
+        .status()
+        .map_err(|err| err.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Could not reveal the file in Finder.".into())
+    }
+}
+
+#[tauri::command]
+pub fn copy_current_path(state: State<'_, AppState>) -> Result<String, String> {
+    let path = state.current_path()?;
+    let text = path.to_string_lossy().into_owned();
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|err| err.to_string())?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Could not copy the path.".to_string())?;
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|err| err.to_string())?;
+    }
+    child.wait().map_err(|err| err.to_string())?;
+    Ok(text)
 }
 
 fn allow_asset_access(app: &AppHandle, path: &Path) {
@@ -120,6 +188,14 @@ fn allow_asset_access(app: &AppHandle, path: &Path) {
     if let Some(parent) = path.parent() {
         let _ = scope.allow_directory(parent, true);
     }
+}
+
+fn apply_watch(app: &AppHandle, state: &AppState, path: PathBuf) -> Result<(), String> {
+    if !state.live_reload_enabled() {
+        *state.watcher.lock().expect("watcher lock") = None;
+        return Ok(());
+    }
+    watch_current_file(app, state, path)
 }
 
 fn watch_current_file(app: &AppHandle, state: &AppState, path: PathBuf) -> Result<(), String> {
@@ -145,6 +221,9 @@ fn watch_current_file(app: &AppHandle, state: &AppState, path: PathBuf) -> Resul
         }
 
         let state = handle.state::<AppState>();
+        if !state.live_reload_enabled() {
+            return;
+        }
         let mut last = state.last_emit.lock().expect("debounce lock");
         let now = Instant::now();
         if now.duration_since(*last) < Duration::from_millis(160) {
@@ -171,13 +250,21 @@ fn watch_current_file(app: &AppHandle, state: &AppState, path: PathBuf) -> Resul
 }
 
 pub fn build_menu(app: &tauri::App) -> tauri::Result<Menu<tauri::Wry>> {
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
     let open = MenuItem::with_id(app, "open", "Open…", true, Some("CmdOrCtrl+O"))?;
+    let reveal = MenuItem::with_id(app, "reveal", "Open in Finder", true, Some("CmdOrCtrl+Alt+R"))?;
+    let copy_path =
+        MenuItem::with_id(app, "copy-path", "Copy File Path", true, Some("CmdOrCtrl+Shift+C"))?;
+    let back = MenuItem::with_id(app, "back", "Back", true, Some("CmdOrCtrl+["))?;
+    let forward = MenuItem::with_id(app, "forward", "Forward", true, Some("CmdOrCtrl+]"))?;
     let app_menu = Submenu::with_items(
         app,
         "MarkdownKit",
         true,
         &[
             &PredefinedMenuItem::about(app, Some("About MarkdownKit"), None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &settings,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::hide_others(app, None)?,
@@ -193,9 +280,13 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<Menu<tauri::Wry>> {
         &[
             &open,
             &PredefinedMenuItem::separator(app)?,
+            &reveal,
+            &copy_path,
+            &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, None)?,
         ],
     )?;
+    let view_menu = Submenu::with_items(app, "View", true, &[&back, &forward])?;
     let edit_menu = Submenu::with_items(
         app,
         "Edit",
@@ -210,5 +301,5 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::select_all(app, None)?,
         ],
     )?;
-    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])
+    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &view_menu])
 }

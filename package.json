@@ -1,0 +1,15 @@
+{
+  "name": "markdownkit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A beautiful, hardware-efficient macOS markdown viewer",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "icon": "tauri icon docs/markdownkit-icon.png -o src-tauri/icons"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

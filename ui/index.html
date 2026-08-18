@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MarkdownKit</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="chrome" data-tauri-drag-region>
+      <p class="chrome-title" id="chrome-title">markdownkit</p>
+    </header>
+
+    <main id="app">
+      <section class="empty" id="empty">
+        <div class="mark" aria-hidden="true">
+          <svg width="64" height="72" viewBox="0 0 64 72" fill="none">
+            <rect x="8" y="4" width="48" height="64" rx="6" fill="#fff" stroke="#e3e2de" />
+            <path d="M14 0v18h10L19 9 14 0z" fill="#37352f" />
+            <text x="32" y="46" text-anchor="middle" font-size="16" font-family="ui-sans-serif, system-ui" fill="#37352f">md</text>
+          </svg>
+        </div>
+        <h1>markdownkit</h1>
+        <p class="lede">A calm reader for local markdown.</p>
+        <button type="button" id="open-button">Open a file</button>
+        <p class="hint">Drop a <code>.md</code> file here, or press <kbd>⌘O</kbd></p>
+      </section>
+
+      <article class="page" id="page" hidden>
+        <dl class="props" id="props" hidden></dl>
+        <div class="content" id="content"></div>
+      </article>
+    </main>
+
+    <p class="toast" id="toast" hidden></p>
+    <script src="./app.js"></script>
+  </body>
+</html>

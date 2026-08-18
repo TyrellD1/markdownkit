@@ -6,6 +6,8 @@ tags: tables, tasks, footnotes
 
 # Kitchen sink
 
+> **Live reload** — this line was just added. If you can read it, the file on disk synced into the viewer.
+
 Every markdown shape MarkdownKit currently renders. Open this from **File → Open**, then follow [the linked note](./linked.md#more) and use **Back**.
 
 ## Headings

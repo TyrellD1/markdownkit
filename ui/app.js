@@ -162,7 +162,22 @@ function renderFrontmatter(fields) {
 }
 
 function applyFrontmatterVisibility() {
-  propsEl.hidden = !showFrontmatterEnabled() || lastFrontmatter.length === 0;
+  const show = showFrontmatterEnabled();
+  const hasFields = lastFrontmatter.length > 0;
+
+  if (!hasFields || show) {
+    propsEl.hidden = !hasFields;
+    propsEl.classList.remove("measuring");
+    pageEl.style.removeProperty("--frontmatter-gap");
+    return;
+  }
+
+  propsEl.hidden = false;
+  propsEl.classList.add("measuring");
+  const extra = Math.round(propsEl.getBoundingClientRect().height / 2);
+  propsEl.classList.remove("measuring");
+  propsEl.hidden = true;
+  pageEl.style.setProperty("--frontmatter-gap", `${extra}px`);
 }
 
 function showToast(message) {

@@ -1,0 +1,19 @@
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/WixTools/
+
+# Node
+node_modules/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Build output
+dist/
+bundle/
+*.app
+*.dmg

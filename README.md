@@ -12,7 +12,7 @@ MarkdownKit is a **viewer**. Open a `.md` file, read it, click a link, go back t
 - Renders GFM basics: headings, lists, task lists, tables, strike, footnotes, fenced code
 - Resolves relative images and in-app links to other markdown files
 - Reloads when the open file changes on disk (optional, in Settings)
-- Dark / light / system appearance from **MarkdownKit → Settings…**
+- Appearance, front matter, and live reload in **MarkdownKit → Settings…**
 - Back / forward when following local markdown links
 - **File → Open in Finder** and **Copy File Path**
 - Registers as a macOS viewer so Finder can double-click `.md` files into the app

@@ -50,14 +50,15 @@ Expected:
 - Empty state titled **markdownkit**
 - No document title in the top bar
 - `⌘O` or the **Open a file** button opens a native picker
-- **MarkdownKit → Settings…** (`⌘,`) opens appearance + live reload
+- **MarkdownKit → Settings…** (`⌘,`) opens appearance, front matter, and live reload
 
 Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, and links.
 
 ### Visual checklist
 
 - [ ] Serif H1, sans body, ~720px column
-- [ ] Frontmatter shown as a quiet property list
+- [ ] Frontmatter shown as a quiet property list when Settings → Show front matter is on
+- [ ] Hiding front matter is immediate and global
 - [ ] Checked / unchecked task boxes
 - [ ] Table, blockquote, inline code, fenced `rust` block
 - [ ] SVG image
@@ -70,6 +71,7 @@ Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, an
 - [ ] **File → Open in Finder** reveals the current file
 - [ ] **File → Copy File Path** copies the path
 - [ ] Settings can force light, dark, or system
+- [ ] **Show front matter** hides or shows YAML properties on every file
 - [ ] Turning off live reload stops disk updates; turning it on restores them
 - [ ] In-page `#` links still scroll when present
 - [ ] `https://` links leave the app (default browser)

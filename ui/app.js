@@ -1,5 +1,6 @@
 const THEME_KEY = "markdownkit.theme";
 const RELOAD_KEY = "markdownkit.liveReload";
+const FRONTMATTER_KEY = "markdownkit.showFrontmatter";
 
 const emptyEl = document.getElementById("empty");
 const pageEl = document.getElementById("page");
@@ -11,8 +12,10 @@ const backButton = document.getElementById("back");
 const forwardButton = document.getElementById("forward");
 const settingsEl = document.getElementById("settings");
 const liveReloadEl = document.getElementById("live-reload");
+const showFrontmatterEl = document.getElementById("show-frontmatter");
 
 let currentPath = null;
+let lastFrontmatter = [];
 let toastTimer = 0;
 const historyStack = [];
 let historyIndex = -1;
@@ -45,6 +48,24 @@ function liveReloadEnabled() {
   } catch {
     return true;
   }
+}
+
+function showFrontmatterEnabled() {
+  try {
+    const stored = localStorage.getItem(FRONTMATTER_KEY);
+    return stored === null ? true : stored === "true";
+  } catch {
+    return true;
+  }
+}
+
+function persistShowFrontmatter(enabled) {
+  try {
+    localStorage.setItem(FRONTMATTER_KEY, String(enabled));
+  } catch {
+    /* ignore */
+  }
+  applyFrontmatterVisibility();
 }
 
 async function persistLiveReload(enabled) {
@@ -124,21 +145,24 @@ function renderDocument(doc) {
 }
 
 function renderFrontmatter(fields) {
+  lastFrontmatter = fields;
   propsEl.replaceChildren();
-  if (!fields.length) {
-    propsEl.hidden = true;
-    return;
+  if (fields.length) {
+    const fragment = document.createDocumentFragment();
+    for (const field of fields) {
+      const dt = document.createElement("dt");
+      dt.textContent = field.key;
+      const dd = document.createElement("dd");
+      dd.textContent = field.value;
+      fragment.append(dt, dd);
+    }
+    propsEl.append(fragment);
   }
-  propsEl.hidden = false;
-  const fragment = document.createDocumentFragment();
-  for (const field of fields) {
-    const dt = document.createElement("dt");
-    dt.textContent = field.key;
-    const dd = document.createElement("dd");
-    dd.textContent = field.value;
-    fragment.append(dt, dd);
-  }
-  propsEl.append(fragment);
+  applyFrontmatterVisibility();
+}
+
+function applyFrontmatterVisibility() {
+  propsEl.hidden = !showFrontmatterEnabled() || lastFrontmatter.length === 0;
 }
 
 function showToast(message) {
@@ -152,6 +176,7 @@ function showToast(message) {
 
 function openSettings() {
   liveReloadEl.checked = liveReloadEnabled();
+  showFrontmatterEl.checked = showFrontmatterEnabled();
   applyTheme(currentTheme());
   settingsEl.hidden = false;
 }
@@ -250,6 +275,8 @@ async function boot() {
   }
 
   liveReloadEl.checked = liveReloadEnabled();
+  showFrontmatterEl.checked = showFrontmatterEnabled();
+  applyFrontmatterVisibility();
   await persistLiveReload(liveReloadEl.checked);
 
   openButton.addEventListener("click", () => {
@@ -263,6 +290,9 @@ async function boot() {
   });
   liveReloadEl.addEventListener("change", () => {
     persistLiveReload(liveReloadEl.checked).catch((error) => showToast(String(error)));
+  });
+  showFrontmatterEl.addEventListener("change", () => {
+    persistShowFrontmatter(showFrontmatterEl.checked);
   });
   for (const button of document.querySelectorAll(".seg [data-theme]")) {
     button.addEventListener("click", () => applyTheme(button.dataset.theme));

@@ -23,7 +23,7 @@ When they do ask:
 npx tauri build --bundles dmg
 ```
 
-The file lands at `src-tauri/target/release/bundle/dmg/MarkdownKit_<version>_aarch64.dmg` (Apple Silicon, ad-hoc signed, not notarized).
+The `.dmg` lands at `src-tauri/target/release/bundle/dmg/` or `target/release/bundle/dmg/` (Apple Silicon, ad-hoc signed, not notarized). Also attach a `markdownkit-serve` binary from `cargo build -p markdownkit-serve --release`, named `markdownkit-serve-aarch64-apple-darwin` (or the matching triple).
 
 4. Publish with a matching git tag `v<version>`. Prefer `gh` if it is authenticated:
 
@@ -31,10 +31,11 @@ The file lands at `src-tauri/target/release/bundle/dmg/MarkdownKit_<version>_aar
 gh release create "v${VERSION}" \
   --title "MarkdownKit ${VERSION}" \
   --notes "…" \
-  "src-tauri/target/release/bundle/dmg/MarkdownKit_${VERSION}_aarch64.dmg"
+  "target/release/bundle/dmg/MarkdownKit_${VERSION}_aarch64.dmg" \
+  "target/release/markdownkit-serve-aarch64-apple-darwin"
 ```
 
-Substitute the real version in the tag, title, and filename. Notes should say what changed, and that Gatekeeper needs `xattr -cr /Applications/MarkdownKit.app` because the build is not notarized.
+Substitute the real version. Notes should say what changed, that Gatekeeper needs `xattr -cr /Applications/MarkdownKit.app`, and that Linux CLI is built with `cargo build -p markdownkit-serve --release` until a Linux asset exists.
 
 Do not enroll in the Apple Developer Program, Developer ID-sign, or notarize unless the user explicitly asks. Do not treat `./scripts/install.sh` or copying into `/Applications` as a GitHub Release.
 

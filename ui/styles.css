@@ -83,7 +83,7 @@ body.drop-target {
   z-index: 2;
   display: flex;
   align-items: flex-start;
-  padding: 8px 0 0 80px;
+  padding: 10px 0 0 80px;
   background: var(--bg);
 }
 

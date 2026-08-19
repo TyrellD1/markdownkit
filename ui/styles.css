@@ -283,11 +283,15 @@ kbd,
   margin: 0.25em 0;
 }
 
+.content li.task {
+  list-style: none;
+}
+
 .content input[type="checkbox"] {
   appearance: none;
   width: 16px;
   height: 16px;
-  margin: 0 8px 0 0;
+  margin: 0 8px 0 -1.4em;
   vertical-align: -2px;
   border: 1px solid var(--muted);
   border-radius: 4px;

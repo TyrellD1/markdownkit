@@ -37,6 +37,7 @@ pub fn render(source: &str, path: &Path) -> RenderedDocument {
 
     let mut events: Vec<Event> = Parser::new_ext(body, options).collect();
     assign_heading_ids(&mut events);
+    let events = mark_task_items(events);
 
     let title = frontmatter
         .iter()
@@ -236,6 +237,21 @@ pub fn slugify(text: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
+fn mark_task_items(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
+    let mut out = Vec::with_capacity(events.len());
+    let mut iter = events.into_iter().peekable();
+    while let Some(event) = iter.next() {
+        if matches!(event, Event::Start(Tag::Item))
+            && matches!(iter.peek(), Some(Event::TaskListMarker(_)))
+        {
+            out.push(Event::InlineHtml("<li class=\"task\">".into()));
+            continue;
+        }
+        out.push(event);
+    }
+    out
+}
+
 fn rewrite_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
     match event {
         Event::Start(Tag::Image {
@@ -358,6 +374,7 @@ fn sanitize(html: &str) -> String {
     builder.add_tag_attributes("input", ["type", "checked", "disabled", "value"]);
     builder.add_tag_attributes("code", ["class"]);
     builder.add_tag_attributes("pre", ["class"]);
+    builder.add_tag_attributes("li", ["class"]);
     builder.add_tag_attributes("a", ["href", "title", "id"]);
     builder.add_tag_attributes("img", ["src", "alt", "title"]);
     builder.add_generic_attributes(["id"]);
@@ -375,6 +392,12 @@ fn sanitize(html: &str) -> String {
                 "checked" | "disabled" => Some(value.into()),
                 _ => None,
             };
+        }
+        if element == "li" && attribute == "class" {
+            if value.split_whitespace().any(|class| class == "task") {
+                return Some("task".into());
+            }
+            return None;
         }
         if attribute == "href" && value.trim().to_ascii_lowercase().starts_with("javascript:") {
             return None;
@@ -458,6 +481,15 @@ mod tests {
         assert!(html.contains("type=\"checkbox\""));
         assert!(html.contains("checked"));
         assert!(html.contains("<del>old</del>") || html.contains("<s>old</s>"));
+    }
+
+    #[test]
+    fn task_items_are_marked_regular_items_are_not() {
+        let html = render_named("- regular\n- [x] done\n", "tasks.md").html;
+        assert!(html.contains("<li>regular</li>") || html.contains("<li>regular\n"));
+        assert!(html.contains("class=\"task\""));
+        assert!(html.contains("type=\"checkbox\""));
+        assert!(!html.contains("<li class=\"task\">regular"));
     }
 
     #[test]
@@ -575,6 +607,7 @@ mod tests {
         assert_eq!(doc.title, "Kitchen sink");
         assert!(doc.html.contains("<table>"));
         assert!(doc.html.contains("type=\"checkbox\""));
+        assert!(doc.html.contains("class=\"task\""));
         assert!(doc.html.contains("<blockquote>"));
         assert!(doc.html.contains("<pre>"));
         assert!(doc.html.contains("language-mermaid"));

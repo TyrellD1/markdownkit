@@ -68,7 +68,15 @@ http://127.0.0.1:8787/?path=/absolute/note.md
 
 `--root DIR` and `--bind HOST:PORT` are available. Theme and front matter are stored in the browser (`/settings`). Put Tailscale Serve in front of localhost.
 
-Apple Silicon builds of `markdownkit-serve` are attached to [GitHub Releases](https://github.com/TyrellD1/markdownkit/releases/latest). Linux: `cargo build -p markdownkit-serve --release` until a Linux asset exists.
+Apple Silicon builds of `markdownkit-serve` are attached to [GitHub Releases](https://github.com/TyrellD1/markdownkit/releases/latest). A browser download is quarantined (unsigned, not notarized). Click **Done**, not Move to Trash, then:
+
+```sh
+xattr -cr ~/Downloads/markdownkit-serve-aarch64-apple-darwin
+chmod +x ~/Downloads/markdownkit-serve-aarch64-apple-darwin
+~/Downloads/markdownkit-serve-aarch64-apple-darwin
+```
+
+Adjust the path if you saved it somewhere else. A binary you built with Cargo is not quarantined. Linux: `cargo build -p markdownkit-serve --release` until a Linux asset exists.
 
 `--check` prints whether a newer release exists. `--update` replaces this binary with the matching GitHub asset. On start, the server prints a one-line notice if a newer version is available (no polling).
 

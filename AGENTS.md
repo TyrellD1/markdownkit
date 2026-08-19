@@ -35,7 +35,7 @@ gh release create "v${VERSION}" \
   "target/release/markdownkit-serve-aarch64-apple-darwin"
 ```
 
-Substitute the real version. Notes should say what changed, that Gatekeeper needs `xattr -cr /Applications/MarkdownKit.app`, and that Linux CLI is built with `cargo build -p markdownkit-serve --release` until a Linux asset exists.
+Substitute the real version. Notes should say what changed, that Gatekeeper needs `xattr -cr` on both `/Applications/MarkdownKit.app` and the downloaded `markdownkit-serve-aarch64-apple-darwin` binary, and that Linux CLI is built with `cargo build -p markdownkit-serve --release` until a Linux asset exists.
 
 Do not enroll in the Apple Developer Program, Developer ID-sign, or notarize unless the user explicitly asks. Do not treat `./scripts/install.sh` or copying into `/Applications` as a GitHub Release.
 

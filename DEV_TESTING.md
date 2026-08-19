@@ -86,11 +86,10 @@ With a document open and the window in the background, Activity Monitor should s
 ## Production build and Finder
 
 ```sh
-npm run build
-open src-tauri/target/release/bundle/macos/
+./scripts/install.sh
 ```
 
-1. Copy `MarkdownKit.app` to `/Applications`.
+Or `npm run build` and copy `src-tauri/target/release/bundle/macos/MarkdownKit.app` into `/Applications`.
 2. Right-click `examples/welcome.md` → **Open With → MarkdownKit**.
 3. To make double-click the default: Get Info on a `.md` file → **Open with → MarkdownKit → Change All…**
 

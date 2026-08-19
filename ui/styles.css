@@ -69,6 +69,13 @@ body {
   overflow: hidden;
 }
 
+html.serve,
+html.serve body {
+  overflow: auto;
+  height: auto;
+  min-height: 100%;
+}
+
 body.drop-target {
   outline: 2px dashed var(--muted);
   outline-offset: -10px;

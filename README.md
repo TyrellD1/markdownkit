@@ -50,6 +50,23 @@ cd markdownkit
 
 That compiles a release `.app` and copies it to `/Applications`. Same command: `npm run install-app`.
 
+## Serve (CLI)
+
+A separate binary, **Mac and Linux** (including headless Ubuntu). Same renderer and CSS as the app. No window.
+
+```sh
+cargo build -p markdownkit-serve --release
+./target/release/markdownkit-serve
+```
+
+Default root is your home directory; default bind is `127.0.0.1:8787`. Then open:
+
+```
+http://127.0.0.1:8787/?path=/absolute/note.md
+```
+
+`--root DIR` and `--bind HOST:PORT` are available. Put Tailscale Serve in front of localhost. This is not a GitHub Release artifact until one is published.
+
 ## Develop
 
 ```sh
@@ -62,7 +79,7 @@ npm run dev
 
 Then **File → Open** (`⌘O`) and choose `examples/welcome.md` or `examples/kitchen-sink.md`. You can also drop a markdown file onto the window.
 
-To produce a `.app` without installing it: `npm run build`. The bundle lands at `src-tauri/target/release/bundle/macos/MarkdownKit.app`.
+To produce a `.app` without installing it: `npm run build`. The bundle lands at `src-tauri/target/release/bundle/macos/MarkdownKit.app` or `target/release/bundle/macos/MarkdownKit.app`.
 
 ## Open `.md` files from Finder
 
@@ -78,7 +95,7 @@ Until that default is set, you can still **Open With → MarkdownKit**.
 
 | Check | How |
 | --- | --- |
-| Unit tests | `npm test` (or `cargo test --manifest-path src-tauri/Cargo.toml`) |
+| Unit tests | `npm test` (or `cargo test --workspace`) |
 | Visual layout | `npm run dev`, open `examples/welcome.md` or `examples/kitchen-sink.md` |
 | Relative links | Click “the linked note”, then **Back** |
 | Relative images | Confirm the `markdownkit` SVG at the bottom of welcome |
@@ -92,7 +109,9 @@ There is a longer checklist in [DEV_TESTING.md](DEV_TESTING.md).
 
 ```
 ui/                 static viewer (no bundler)
-src-tauri/          Tauri + markdown engine
+crates/engine/      shared markdown renderer
+crates/serve/       markdownkit-serve HTTP CLI
+src-tauri/          macOS Tauri app
 examples/           sample notes for manual tests
 docs/               README artwork and source icon
 ```

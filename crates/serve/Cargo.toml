@@ -1,0 +1,15 @@
+[package]
+name = "markdownkit-serve"
+version = "0.1.0"
+description = "Serve local markdown as MarkdownKit HTML"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "markdownkit-serve"
+path = "src/main.rs"
+
+[dependencies]
+markdownkit-engine = { path = "../engine" }
+tiny_http = "0.12"
+urlencoding = "2"

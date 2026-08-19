@@ -10,7 +10,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::markdown::{self, RenderedDocument};
+use markdownkit_engine::{self as markdown, RenderedDocument};
 
 pub struct AppState {
     pub current: Mutex<Option<PathBuf>>,

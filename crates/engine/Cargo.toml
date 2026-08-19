@@ -1,0 +1,12 @@
+[package]
+name = "markdownkit-engine"
+version = "0.1.0"
+description = "Shared markdown renderer for MarkdownKit"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+ammonia = "4"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html", "simd"] }
+serde = { version = "1", features = ["derive"] }
+urlencoding = "2"

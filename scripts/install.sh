@@ -15,6 +15,9 @@ npx tauri build --bundles app
 
 src="$root/src-tauri/target/release/bundle/macos/MarkdownKit.app"
 if [[ ! -d "$src" ]]; then
+  src="$root/target/release/bundle/macos/MarkdownKit.app"
+fi
+if [[ ! -d "$src" ]]; then
   echo "Build did not produce MarkdownKit.app at $src" >&2
   exit 1
 fi

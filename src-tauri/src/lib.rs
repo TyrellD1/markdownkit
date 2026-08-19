@@ -1,5 +1,4 @@
 mod app;
-mod markdown;
 
 use tauri::Emitter;
 

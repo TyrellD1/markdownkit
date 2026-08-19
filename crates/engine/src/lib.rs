@@ -8,6 +8,14 @@ use serde::Serialize;
 
 const OPEN_PREFIX: &str = "/__mk__/open?path=";
 const EXTERNAL_PREFIX: &str = "/__mk__/external?path=";
+const HTTP_VIEW_PREFIX: &str = "/?path=";
+const HTTP_ASSET_PREFIX: &str = "/asset?path=";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkMode {
+    App,
+    Http,
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FrontmatterField {
@@ -24,6 +32,10 @@ pub struct RenderedDocument {
 }
 
 pub fn render(source: &str, path: &Path) -> RenderedDocument {
+    render_with(source, path, LinkMode::App)
+}
+
+pub fn render_with(source: &str, path: &Path, mode: LinkMode) -> RenderedDocument {
     let (frontmatter, body) = split_frontmatter(source);
     let base_dir = path.parent().unwrap_or(path);
 
@@ -49,7 +61,7 @@ pub fn render(source: &str, path: &Path) -> RenderedDocument {
 
     let events = events
         .into_iter()
-        .map(|event| rewrite_event(event, base_dir));
+        .map(|event| rewrite_event(event, base_dir, mode));
 
     let mut html = String::with_capacity(body.len().saturating_mul(2).max(64));
     html::push_html(&mut html, events);
@@ -70,6 +82,17 @@ pub fn is_markdown_path(path: &Path) -> bool {
             matches!(
                 ext.to_ascii_lowercase().as_str(),
                 "md" | "markdown" | "mdown" | "mkd"
+            )
+        })
+}
+
+pub fn is_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" | "avif" | "bmp"
             )
         })
 }
@@ -252,7 +275,7 @@ fn mark_task_items(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
     out
 }
 
-fn rewrite_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
+fn rewrite_event<'a>(event: Event<'a>, base_dir: &Path, mode: LinkMode) -> Event<'a> {
     match event {
         Event::Start(Tag::Image {
             link_type,
@@ -261,7 +284,7 @@ fn rewrite_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
             id,
         }) => Event::Start(Tag::Image {
             link_type,
-            dest_url: CowStr::from(rewrite_image_url(base_dir, &dest_url)),
+            dest_url: CowStr::from(rewrite_image_url(base_dir, &dest_url, mode)),
             title,
             id,
         }),
@@ -272,7 +295,7 @@ fn rewrite_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
             id,
         }) => Event::Start(Tag::Link {
             link_type,
-            dest_url: CowStr::from(rewrite_link_url(base_dir, &dest_url)),
+            dest_url: CowStr::from(rewrite_link_url(base_dir, &dest_url, mode)),
             title,
             id,
         }),
@@ -283,7 +306,7 @@ fn rewrite_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
     }
 }
 
-pub fn rewrite_image_url(base_dir: &Path, dest: &str) -> String {
+pub fn rewrite_image_url(base_dir: &Path, dest: &str, mode: LinkMode) -> String {
     if dest.is_empty() || dest.starts_with('#') || is_external(dest) {
         return dest.to_string();
     }
@@ -291,10 +314,14 @@ pub fn rewrite_image_url(base_dir: &Path, dest: &str) -> String {
     if path_part.is_empty() {
         return dest.to_string();
     }
-    to_asset_url(&resolve_path(base_dir, path_part))
+    let resolved = resolve_path(base_dir, path_part);
+    match mode {
+        LinkMode::App => to_asset_url(&resolved),
+        LinkMode::Http => to_http_asset_url(&resolved),
+    }
 }
 
-pub fn rewrite_link_url(base_dir: &Path, dest: &str) -> String {
+pub fn rewrite_link_url(base_dir: &Path, dest: &str, mode: LinkMode) -> String {
     if dest.is_empty() || dest.starts_with('#') || is_external(dest) {
         return dest.to_string();
     }
@@ -303,27 +330,58 @@ pub fn rewrite_link_url(base_dir: &Path, dest: &str) -> String {
         return dest.to_string();
     }
     let resolved = resolve_path(base_dir, path_part);
-    if is_markdown_path(&resolved) {
-        let mut url = format!(
-            "{OPEN_PREFIX}{}",
-            urlencoding::encode(&resolved.to_string_lossy())
-        );
-        if let Some(fragment) = fragment {
-            url.push('#');
-            url.push_str(fragment);
+    match mode {
+        LinkMode::App => {
+            if is_markdown_path(&resolved) {
+                with_fragment(
+                    format!(
+                        "{OPEN_PREFIX}{}",
+                        urlencoding::encode(&resolved.to_string_lossy())
+                    ),
+                    fragment,
+                )
+            } else {
+                format!(
+                    "{EXTERNAL_PREFIX}{}",
+                    urlencoding::encode(&resolved.to_string_lossy())
+                )
+            }
         }
-        url
-    } else {
-        format!(
-            "{EXTERNAL_PREFIX}{}",
-            urlencoding::encode(&resolved.to_string_lossy())
-        )
+        LinkMode::Http => {
+            if is_markdown_path(&resolved) {
+                with_fragment(to_http_view_url(&resolved), fragment)
+            } else {
+                to_http_asset_url(&resolved)
+            }
+        }
     }
+}
+
+fn with_fragment(mut url: String, fragment: Option<&str>) -> String {
+    if let Some(fragment) = fragment {
+        url.push('#');
+        url.push_str(fragment);
+    }
+    url
 }
 
 pub fn to_asset_url(path: &Path) -> String {
     format!(
         "asset://localhost/{}",
+        urlencoding::encode(&path.to_string_lossy())
+    )
+}
+
+pub fn to_http_view_url(path: &Path) -> String {
+    format!(
+        "{HTTP_VIEW_PREFIX}{}",
+        urlencoding::encode(&path.to_string_lossy())
+    )
+}
+
+pub fn to_http_asset_url(path: &Path) -> String {
+    format!(
+        "{HTTP_ASSET_PREFIX}{}",
         urlencoding::encode(&path.to_string_lossy())
     )
 }
@@ -573,6 +631,24 @@ mod tests {
         assert!(is_markdown_path(Path::new("a.md")));
         assert!(is_markdown_path(Path::new("a.MARKDOWN")));
         assert!(!is_markdown_path(Path::new("a.txt")));
+        assert!(is_image_path(Path::new("a.PNG")));
+        assert!(!is_image_path(Path::new("a.md")));
+    }
+
+    #[test]
+    fn http_mode_rewrites_local_links_and_images() {
+        let html = render_with(
+            "![cat](./images/cat.png)\n[next](./more.md#todo)\n",
+            Path::new("/notes/post.md"),
+            LinkMode::Http,
+        )
+        .html;
+        assert!(html.contains("/asset?path="));
+        assert!(html.contains("/?path="));
+        assert!(html.contains("more.md"));
+        assert!(html.contains("#todo"));
+        assert!(!html.contains("asset://localhost/"));
+        assert!(!html.contains("/__mk__/"));
     }
 
     #[test]
@@ -589,7 +665,7 @@ mod tests {
 
     #[test]
     fn welcome_fixture_renders() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/welcome.md");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/welcome.md");
         let source = std::fs::read_to_string(&path).expect("welcome.md");
         let doc = render(&source, &path);
         assert_eq!(doc.title, "Welcome to MarkdownKit");
@@ -601,7 +677,7 @@ mod tests {
 
     #[test]
     fn kitchen_sink_renders_gfm_shapes() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/kitchen-sink.md");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/kitchen-sink.md");
         let source = std::fs::read_to_string(&path).expect("kitchen-sink.md");
         let doc = render(&source, &path);
         assert_eq!(doc.title, "Kitchen sink");

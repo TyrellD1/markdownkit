@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "cargo test --workspace",
     "icon": "tauri icon docs/markdownkit-icon.png -o src-tauri/icons",
     "install-app": "bash scripts/install.sh"
   },

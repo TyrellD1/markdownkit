@@ -46,12 +46,18 @@ MarkdownKit is a macOS-only Tauri markdown viewer. Keep it simple, correct, and 
 - Minimal hardware utilization. No background work when idle: no poll loops, animation loops, webfonts, JS markdown parsing, or extra frameworks. Watch only the currently open file, and only when live reload is on. Idle CPU should be effectively zero.
 - Parse markdown in Rust (`pulldown-cmark`). Do not add a JS markdown library.
 - Mermaid is the exception: load `ui/vendor/mermaid.min.js` only when the open document contains a mermaid fence. Do not load it on empty or mermaid-free pages. Theme diagrams to match the page; no extra chrome.
-- macOS is the only supported platform.
+- The macOS `.app` is the only GUI. `markdownkit-serve` is a separate CLI for Mac and Linux; it reuses `markdownkit-engine` and must not pull in Tauri.
 
 ## Tests
 
-When you change rendering, sanitization, path rewriting, or frontmatter, update tests in `src-tauri` and run:
+When you change rendering, sanitization, path rewriting, or frontmatter, update tests in `crates/engine` (and `crates/serve` if the HTTP wrapper changed) and run:
 
 ```sh
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --workspace
+```
+
+On a machine without the Tauri GUI stack:
+
+```sh
+cargo test -p markdownkit-engine -p markdownkit-serve
 ```

@@ -33,10 +33,10 @@ npm test
 Equivalent:
 
 ```sh
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --workspace
 ```
 
-Run them after any change to `src-tauri/src/markdown.rs`.
+Run them after any change to `crates/engine` or `crates/serve`.
 
 ## Run the app
 

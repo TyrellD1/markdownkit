@@ -2148,6 +2148,7 @@ dependencies = [
 name = "markdownkit-serve"
 version = "0.2.0"
 dependencies = [
+ "libc",
  "markdownkit-engine",
  "markdownkit-update",
  "tiny_http",

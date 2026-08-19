@@ -57,8 +57,10 @@ A separate binary, **Mac and Linux** (including headless Ubuntu). Same renderer 
 
 ```sh
 cargo build -p markdownkit-serve --release
-./target/release/markdownkit-serve
+./target/release/markdownkit-serve start
 ```
+
+`start` runs in the background so you can close the terminal. `markdownkit-serve stop` ends it. Without `start`, it stays in the foreground. Pid and log live in `~/.markdownkit/`.
 
 Default root is your home directory; default bind is `127.0.0.1:8787`. Open `http://127.0.0.1:8787/` and paste an absolute markdown path (opens a new tab), or go directly to:
 

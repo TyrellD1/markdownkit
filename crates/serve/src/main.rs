@@ -1,5 +1,8 @@
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
+use std::time::Duration;
 
 use markdownkit_serve::{handle, Config};
 use tiny_http::{Header, Response, Server, StatusCode};
@@ -9,9 +12,13 @@ markdownkit-serve — serve local markdown as HTML (same renderer as MarkdownKit
 
 USAGE:
   markdownkit-serve [--root DIR] [--bind ADDR]
+  markdownkit-serve start [--root DIR] [--bind ADDR]
+  markdownkit-serve stop
   markdownkit-serve --check
   markdownkit-serve --update
 
+  start        Run in the background (closing the terminal is fine)
+  stop         Stop the background server
   --root DIR   Only serve files under this directory (default: home)
   --bind ADDR  Listen address (default: 127.0.0.1:8787)
   --check      Print whether a newer GitHub release exists
@@ -31,6 +38,13 @@ Bind to localhost and put Tailscale Serve in front. Do not expose this
 to the public internet.
 ";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Foreground,
+    Start,
+    Stop,
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "-h" || arg == "--help") {
@@ -44,7 +58,7 @@ fn main() -> ExitCode {
         return run_update();
     }
 
-    let (root, bind) = match parse_args(&args) {
+    let (mode, root, bind) = match parse_args(&args) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("{error}\n\n{HELP}");
@@ -52,6 +66,14 @@ fn main() -> ExitCode {
         }
     };
 
+    match mode {
+        Mode::Stop => run_stop(),
+        Mode::Start => run_start(root, bind),
+        Mode::Foreground => run_foreground(root, bind),
+    }
+}
+
+fn run_foreground(root: PathBuf, bind: String) -> ExitCode {
     let root = match root.canonicalize() {
         Ok(root) => root,
         Err(error) => {
@@ -94,6 +116,176 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+fn run_start(root: PathBuf, bind: String) -> ExitCode {
+    if let Some(running) = running_server() {
+        println!(
+            "markdownkit-serve already running on http://{} (pid {})",
+            running.bind, running.pid
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            eprintln!("Could not locate this binary: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let paths = match state_paths() {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = fs::create_dir_all(&paths.dir) {
+        eprintln!("Could not create {}: {error}", paths.dir.display());
+        return ExitCode::from(1);
+    }
+
+    let log = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&paths.log)
+    {
+        Ok(log) => log,
+        Err(error) => {
+            eprintln!("Could not write {}: {error}", paths.log.display());
+            return ExitCode::from(1);
+        }
+    };
+    let log_err = match log.try_clone() {
+        Ok(log) => log,
+        Err(error) => {
+            eprintln!("Could not write {}: {error}", paths.log.display());
+            return ExitCode::from(1);
+        }
+    };
+
+    let mut cmd = Command::new(&exe);
+    cmd.args(["--root", &root.to_string_lossy(), "--bind", &bind])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err));
+    if let Err(error) = detach_child(&mut cmd) {
+        eprintln!("Could not start in the background: {error}");
+        return ExitCode::from(1);
+    }
+
+    let child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("Could not start markdownkit-serve: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let pid = child.id();
+    std::mem::forget(child);
+    if let Err(error) = write_state(pid, &bind) {
+        eprintln!("{error}");
+        return ExitCode::from(1);
+    }
+
+    std::thread::sleep(Duration::from_millis(250));
+    if !pid_alive(pid) {
+        let _ = fs::remove_file(pid_path());
+        eprintln!("markdownkit-serve failed to start.");
+        if let Ok(text) = fs::read_to_string(&paths.log) {
+            eprint!("{text}");
+        }
+        return ExitCode::from(1);
+    }
+
+    println!("markdownkit-serve started on http://{bind} (pid {pid})");
+    ExitCode::SUCCESS
+}
+
+fn run_stop() -> ExitCode {
+    let Some(running) = read_state() else {
+        println!("markdownkit-serve is not running.");
+        return ExitCode::SUCCESS;
+    };
+    if !pid_alive(running.pid) {
+        let _ = fs::remove_file(pid_path());
+        println!("markdownkit-serve is not running.");
+        return ExitCode::SUCCESS;
+    }
+    if let Err(error) = signal_term(running.pid) {
+        eprintln!("Could not stop markdownkit-serve (pid {}): {error}", running.pid);
+        return ExitCode::from(1);
+    }
+    for _ in 0..20 {
+        if !pid_alive(running.pid) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = fs::remove_file(pid_path());
+    println!("markdownkit-serve stopped.");
+    ExitCode::SUCCESS
+}
+
+struct Running {
+    pid: u32,
+    bind: String,
+}
+
+fn running_server() -> Option<Running> {
+    let running = read_state()?;
+    if pid_alive(running.pid) {
+        Some(running)
+    } else {
+        let _ = fs::remove_file(pid_path());
+        None
+    }
+}
+
+fn read_state() -> Option<Running> {
+    let text = fs::read_to_string(pid_path()).ok()?;
+    let mut lines = text.lines();
+    let pid = lines.next()?.trim().parse().ok()?;
+    let bind = lines
+        .next()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .unwrap_or_else(|| "127.0.0.1:8787".to_string());
+    Some(Running { pid, bind })
+}
+
+fn write_state(pid: u32, bind: &str) -> Result<(), String> {
+    let path = pid_path();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|err| format!("Could not write {}: {err}", path.display()))?;
+    }
+    let mut file = fs::File::create(&path)
+        .map_err(|err| format!("Could not write {}: {err}", path.display()))?;
+    write!(file, "{pid}\n{bind}\n")
+        .map_err(|err| format!("Could not write {}: {err}", path.display()))?;
+    Ok(())
+}
+
+struct StatePaths {
+    dir: PathBuf,
+    log: PathBuf,
+}
+
+fn state_paths() -> Result<StatePaths, String> {
+    let dir = home_dir()?.join(".markdownkit");
+    Ok(StatePaths {
+        log: dir.join("serve.log"),
+        dir,
+    })
+}
+
+fn pid_path() -> PathBuf {
+    match home_dir() {
+        Ok(home) => home.join(".markdownkit").join("serve.pid"),
+        Err(_) => PathBuf::from("markdownkit-serve.pid"),
+    }
 }
 
 fn spawn_update_notice() {
@@ -168,12 +360,27 @@ fn run_update() -> ExitCode {
     }
 }
 
-fn parse_args(args: &[String]) -> Result<(PathBuf, String), String> {
+fn parse_args(args: &[String]) -> Result<(Mode, PathBuf, String), String> {
     let mut root = None;
     let mut bind = "127.0.0.1:8787".to_string();
+    let mut mode = Mode::Foreground;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "start" => {
+                if mode == Mode::Stop {
+                    return Err("Use start or stop, not both.".into());
+                }
+                mode = Mode::Start;
+                i += 1;
+            }
+            "stop" => {
+                if mode == Mode::Start {
+                    return Err("Use start or stop, not both.".into());
+                }
+                mode = Mode::Stop;
+                i += 1;
+            }
             "--root" => {
                 let value = args.get(i + 1).ok_or("--root needs a directory")?;
                 root = Some(PathBuf::from(value));
@@ -196,7 +403,7 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, String), String> {
         Some(root) => root,
         None => home_dir()?,
     };
-    Ok((root, bind))
+    Ok((mode, root, bind))
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -204,4 +411,93 @@ fn home_dir() -> Result<PathBuf, String> {
         return Ok(PathBuf::from(home));
     }
     Err("Could not determine home directory; pass --root DIR.".into())
+}
+
+fn detach_child(cmd: &mut Command) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = cmd;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "start/stop require macOS or Linux",
+        ))
+    }
+}
+
+fn pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let pid = pid as i32;
+        if pid <= 0 {
+            return false;
+        }
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+fn signal_term(pid: u32) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let pid = pid as i32;
+        if pid <= 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid pid"));
+        }
+        let result = unsafe { libc::kill(pid, libc::SIGTERM) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "start/stop require macOS or Linux",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_start_stop_and_bind() {
+        let (mode, _, bind) = parse_args(&["start".into()]).unwrap();
+        assert_eq!(mode, Mode::Start);
+        assert_eq!(bind, "127.0.0.1:8787");
+
+        let (mode, _, bind) =
+            parse_args(&["start".into(), "--bind".into(), "127.0.0.1:9999".into()]).unwrap();
+        assert_eq!(mode, Mode::Start);
+        assert_eq!(bind, "127.0.0.1:9999");
+
+        let (mode, _, _) = parse_args(&["stop".into()]).unwrap();
+        assert_eq!(mode, Mode::Stop);
+
+        let (mode, _, _) = parse_args(&[]).unwrap();
+        assert_eq!(mode, Mode::Foreground);
+
+        assert!(parse_args(&["start".into(), "stop".into()]).is_err());
+    }
 }

@@ -188,7 +188,11 @@ kbd,
 .page {
   width: min(752px, 100%);
   margin: 0 auto;
-  padding: calc(16px + var(--frontmatter-gap, 0px)) 48px 160px;
+  padding: 16px 48px 160px;
+}
+
+.page.is-frontmatter-hidden {
+  padding-top: 32px;
 }
 
 .props {
@@ -478,16 +482,13 @@ kbd,
   display: none !important;
 }
 
-.props.measuring {
-  display: grid !important;
-  position: absolute;
-  visibility: hidden;
-  pointer-events: none;
-}
-
 @media (max-width: 700px) {
   .page {
-    padding: calc(12px + var(--frontmatter-gap, 0px)) 22px 120px;
+    padding: 12px 22px 120px;
+  }
+
+  .page.is-frontmatter-hidden {
+    padding-top: 28px;
   }
 
   .content h1 {

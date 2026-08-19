@@ -65,7 +65,7 @@ Default root is your home directory; default bind is `127.0.0.1:8787`. Then open
 http://127.0.0.1:8787/?path=/absolute/note.md
 ```
 
-`--root DIR` and `--bind HOST:PORT` are available. Put Tailscale Serve in front of localhost. This is not a GitHub Release artifact until one is published.
+`--root DIR` and `--bind HOST:PORT` are available. Theme and front matter are stored in the browser (`/settings`). Put Tailscale Serve in front of localhost. This is not a GitHub Release artifact until one is published.
 
 ## Develop
 

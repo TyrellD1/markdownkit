@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use markdownkit_engine::{self as engine, LinkMode};
 
 const STYLES: &str = include_str!("../../../ui/styles.css");
+const SERVE_JS: &str = include_str!("../../../ui/serve.js");
 const MERMAID_JS: &str = include_str!("../../../ui/mermaid.js");
 const MERMAID_MIN: &[u8] = include_bytes!("../../../ui/vendor/mermaid.min.js");
 
@@ -45,8 +46,10 @@ pub fn handle(config: &Config, method: &str, url: &str) -> Reply {
     let (path, query) = split_path_query(url);
     match path {
         "/styles.css" => Reply::text(200, "text/css; charset=utf-8", STYLES),
+        "/serve.js" => Reply::text(200, "text/javascript; charset=utf-8", SERVE_JS),
         "/mermaid.js" => Reply::text(200, "text/javascript; charset=utf-8", MERMAID_JS),
         "/vendor/mermaid.min.js" => Reply::bytes(200, "text/javascript; charset=utf-8", MERMAID_MIN.to_vec()),
+        "/settings" => settings_page(),
         "/" | "/index.html" => {
             if let Some(requested) = query_param(query, "path") {
                 serve_markdown(config, &requested)
@@ -147,18 +150,19 @@ fn document_page(doc: &engine::RenderedDocument) -> String {
         props.push_str("</dl>");
     }
 
-    shell(&escape_html(&doc.title), &props, &doc.html, mermaid)
+    shell(&escape_html(&doc.title), &props, &doc.html, mermaid, true)
 }
 
 fn help_page() -> Reply {
     let content = r#"<h1>markdownkit-serve</h1>
 <p>Pass a markdown file path:</p>
 <pre><code>/?path=/absolute/note.md</code></pre>
-<p>Files must stay under the configured root (default: home). Images next to a note are served from <code>/asset?path=…</code>.</p>"#;
+<p>Files must stay under the configured root (default: home). Images next to a note are served from <code>/asset?path=…</code>.</p>
+<p>Appearance and front matter live in this browser at <a href="/settings">/settings</a>.</p>"#;
     Reply::text(
         200,
         "text/html; charset=utf-8",
-        shell("markdownkit-serve", "", content, ""),
+        shell("markdownkit-serve", "", content, "", true),
     )
 }
 
@@ -173,11 +177,40 @@ fn status_page(status: u16) -> Reply {
     Reply::text(
         status,
         "text/html; charset=utf-8",
-        shell("MarkdownKit", "", &content, ""),
+        shell("MarkdownKit", "", &content, "", true),
     )
 }
 
-fn shell(title: &str, props: &str, content: &str, extra_head: &str) -> String {
+fn settings_page() -> Reply {
+    let content = r#"<div class="modal-card serve-card">
+        <h2 id="settings-title">Settings</h2>
+        <div class="setting">
+          <p class="setting-label">Appearance</p>
+          <div class="seg" role="radiogroup" aria-label="Appearance">
+            <button type="button" data-theme="system">System</button>
+            <button type="button" data-theme="light">Light</button>
+            <button type="button" data-theme="dark">Dark</button>
+          </div>
+        </div>
+        <label class="setting toggle">
+          <input type="checkbox" id="show-frontmatter" />
+          <span>Show front matter</span>
+        </label>
+        <button type="button" class="done" id="settings-done">Done</button>
+      </div>"#;
+    Reply::text(
+        200,
+        "text/html; charset=utf-8",
+        shell("Settings", "", content, "", false),
+    )
+}
+
+fn shell(title: &str, props: &str, content: &str, extra_head: &str, settings_link: bool) -> String {
+    let link = if settings_link {
+        r#"<a class="serve-settings" href="/settings">Settings</a>"#
+    } else {
+        ""
+    };
     format!(
         r#"<!DOCTYPE html>
 <html lang="en" class="serve" data-theme="system">
@@ -185,6 +218,16 @@ fn shell(title: &str, props: &str, content: &str, extra_head: &str) -> String {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
+    <script>
+      try {{
+        const theme = localStorage.getItem("markdownkit.theme") || "system";
+        if (["system", "light", "dark"].includes(theme)) {{
+          document.documentElement.dataset.theme = theme;
+        }}
+      }} catch {{
+        /* ignore */
+      }}
+    </script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -192,6 +235,8 @@ fn shell(title: &str, props: &str, content: &str, extra_head: &str) -> String {
       {props}
       <div class="content">{content}</div>
     </article>
+    {link}
+    <script src="/serve.js"></script>
     {extra_head}
   </body>
 </html>
@@ -303,6 +348,8 @@ mod tests {
         assert!(body.contains("<h1 id=\"hello\">Hello</h1>"));
         assert!(body.contains("World."));
         assert!(body.contains("class=\"serve\""));
+        assert!(body.contains("/serve.js"));
+        assert!(body.contains("href=\"/settings\""));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -330,7 +377,23 @@ mod tests {
         let body = String::from_utf8(reply.body).unwrap();
         assert_eq!(reply.status, 200);
         assert!(body.contains("markdownkit-serve"));
+        assert!(body.contains("/settings"));
         assert!(!body.contains("/mermaid.js"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn settings_page_has_app_prefs_without_live_reload() {
+        let root = temp_root("settings");
+        let config = Config { root: root.clone() };
+        let reply = handle(&config, "GET", "/settings");
+        let body = String::from_utf8(reply.body).unwrap();
+        assert_eq!(reply.status, 200);
+        assert!(body.contains("Appearance"));
+        assert!(body.contains("Show front matter"));
+        assert!(body.contains("/serve.js"));
+        assert!(!body.contains("live-reload"));
+        assert!(!body.contains("file changes on disk"));
         let _ = fs::remove_dir_all(&root);
     }
 

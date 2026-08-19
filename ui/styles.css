@@ -76,6 +76,24 @@ html.serve body {
   min-height: 100%;
 }
 
+html.serve .serve-card {
+  margin: 48px auto;
+}
+
+html.serve .serve-settings {
+  display: block;
+  width: min(752px, 100%);
+  margin: 0 auto;
+  padding: 0 48px 48px;
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+html.serve .serve-settings:hover {
+  color: var(--text);
+}
+
 body.drop-target {
   outline: 2px dashed var(--muted);
   outline-offset: -10px;
@@ -511,6 +529,10 @@ kbd,
 
   .page.is-frontmatter-hidden {
     padding-top: 36px;
+  }
+
+  html.serve .serve-settings {
+    padding: 0 22px 40px;
   }
 
   .content h1 {

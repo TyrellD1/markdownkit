@@ -17,6 +17,9 @@ USAGE:
 Open a note:
   http://127.0.0.1:8787/?path=/absolute/note.md
 
+Settings (this browser only):
+  http://127.0.0.1:8787/settings
+
 Bind to localhost and put Tailscale Serve in front. Do not expose this
 to the public internet.
 ";

@@ -83,5 +83,21 @@ function bindSettingsControls() {
 document.addEventListener("DOMContentLoaded", () => {
   applyServePrefs();
   bindSettingsControls();
+  bindOpenPath();
 });
 window.addEventListener("pageshow", applyServePrefs);
+
+function bindOpenPath() {
+  const form = document.getElementById("open-path");
+  if (!form || form.dataset.bound) return;
+  form.dataset.bound = "1";
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = form.querySelector("input[name='path']");
+    const path = (input?.value || "").trim();
+    if (!path) return;
+    const url = "/?path=" + encodeURIComponent(path);
+    window.open(url, "_blank", "noopener");
+    input.value = "";
+  });
+}

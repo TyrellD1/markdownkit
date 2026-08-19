@@ -94,6 +94,43 @@ html.serve .serve-settings:hover {
   color: var(--text);
 }
 
+html.serve .serve-open {
+  display: flex;
+  gap: 8px;
+  margin: 1.2em 0 1.4em;
+  max-width: 560px;
+}
+
+html.serve .serve-open input {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--elevated);
+  color: var(--text);
+}
+
+html.serve .serve-open button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--elevated);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 14px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+html.serve .serve-open button:hover {
+  background: var(--callout);
+}
+
 body.drop-target {
   outline: 2px dashed var(--muted);
   outline-offset: -10px;
@@ -516,6 +553,10 @@ kbd,
   color: var(--bg);
   font-size: 13px;
   z-index: 5;
+}
+
+.toast.is-action {
+  cursor: pointer;
 }
 
 [hidden] {

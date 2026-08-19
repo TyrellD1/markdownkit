@@ -155,14 +155,16 @@ fn document_page(doc: &engine::RenderedDocument) -> String {
 
 fn help_page() -> Reply {
     let content = r#"<h1>markdownkit-serve</h1>
-<p>Pass a markdown file path:</p>
-<pre><code>/?path=/absolute/note.md</code></pre>
-<p>Files must stay under the configured root (default: home). Images next to a note are served from <code>/asset?path=…</code>.</p>
-<p>Appearance and front matter live in this browser at <a href="/settings">/settings</a>.</p>"#;
+<p class="lede">Open a local markdown file.</p>
+<form id="open-path" class="serve-open">
+  <input type="text" name="path" placeholder="/absolute/note.md" autocomplete="off" spellcheck="false" />
+  <button type="submit">Open</button>
+</form>
+<p><a href="/settings">Settings</a></p>"#;
     Reply::text(
         200,
         "text/html; charset=utf-8",
-        shell("markdownkit-serve", "", content, "", true),
+        shell("markdownkit-serve", "", content, "", false),
     )
 }
 
@@ -377,7 +379,9 @@ mod tests {
         let body = String::from_utf8(reply.body).unwrap();
         assert_eq!(reply.status, 200);
         assert!(body.contains("markdownkit-serve"));
-        assert!(body.contains("/settings"));
+        assert!(body.contains("id=\"open-path\""));
+        assert!(body.contains("name=\"path\""));
+        assert!(body.contains("href=\"/settings\""));
         assert!(!body.contains("/mermaid.js"));
         let _ = fs::remove_dir_all(&root);
     }

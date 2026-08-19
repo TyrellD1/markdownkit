@@ -20,13 +20,36 @@ MarkdownKit is a **viewer**. Open a `.md` file, read it, click a link, go back t
 
 Parsing happens in Rust (`pulldown-cmark`). The UI is a small static HTML/CSS/JS shell. There is no React, no bundler, and no background polling.
 
-## Requirements
+## Install
 
-- macOS 11 or later
-- [Node.js](https://nodejs.org/) 20+
-- [Rust](https://rustup.rs/) (stable)
+**macOS 11+.** Pick one.
 
-## Run it
+### Download a release
+
+1. Get the latest `.dmg` from [Releases](https://github.com/TyrellD1/markdownkit/releases/latest).
+2. Open it and drag **MarkdownKit** into `/Applications`.
+3. Clear Gatekeeper’s quarantine (the build is not Apple-notarized; otherwise macOS may say the app is damaged):
+
+```sh
+xattr -cr /Applications/MarkdownKit.app
+open -a MarkdownKit
+```
+
+Current builds are Apple Silicon (`aarch64`).
+
+### Build from source
+
+Needs [Node.js](https://nodejs.org/) 20+ and [Rust](https://rustup.rs/) (stable).
+
+```sh
+git clone https://github.com/TyrellD1/markdownkit.git
+cd markdownkit
+./scripts/install.sh
+```
+
+That compiles a release `.app` and copies it to `/Applications`. Same command: `npm run install-app`.
+
+## Develop
 
 ```sh
 git clone https://github.com/TyrellD1/markdownkit.git
@@ -38,21 +61,7 @@ npm run dev
 
 Then **File → Open** (`⌘O`) and choose `examples/welcome.md` or `examples/kitchen-sink.md`. You can also drop a markdown file onto the window.
 
-To install on this Mac from source:
-
-```sh
-./scripts/install.sh
-```
-
-That builds the release `.app` and copies it to `/Applications`. Same thing: `npm run install-app`.
-
-Or build only, then drag the app yourself:
-
-```sh
-npm run build
-```
-
-The bundle lands at `src-tauri/target/release/bundle/macos/MarkdownKit.app`. There is no Homebrew cask or signed DMG yet — install is “build locally, put the `.app` in Applications.”
+To produce a `.app` without installing it: `npm run build`. The bundle lands at `src-tauri/target/release/bundle/macos/MarkdownKit.app`.
 
 ## Open `.md` files from Finder
 

@@ -523,6 +523,14 @@ mod tests {
     }
 
     #[test]
+    fn preserves_mermaid_fences() {
+        let html = render_named("```mermaid\nflowchart LR\n  A --> B\n```\n", "diagram.md").html;
+        assert!(html.contains("language-mermaid"));
+        assert!(html.contains("flowchart LR"));
+        assert!(html.contains("A --&gt; B") || html.contains("A --> B"));
+    }
+
+    #[test]
     fn resolve_parent_segments_without_filesystem() {
         let resolved = resolve_path(Path::new("/notes/sub"), "../img/a.png");
         assert_eq!(resolved, PathBuf::from("/notes/img/a.png"));
@@ -569,6 +577,7 @@ mod tests {
         assert!(doc.html.contains("type=\"checkbox\""));
         assert!(doc.html.contains("<blockquote>"));
         assert!(doc.html.contains("<pre>"));
+        assert!(doc.html.contains("language-mermaid"));
         assert!(doc.html.contains("id=\"custom-id\""));
         assert!(doc.html.contains("footnote") || doc.html.contains("Footnotes"));
         assert!(doc.html.contains("/__mk__/open?path="));

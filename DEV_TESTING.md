@@ -52,7 +52,7 @@ Expected:
 - `⌘O` or the **Open a file** button opens a native picker
 - **MarkdownKit → Settings…** (`⌘,`) opens appearance, front matter, and live reload
 
-Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, and links.
+Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, mermaid, and links.
 
 ### Visual checklist
 
@@ -61,6 +61,7 @@ Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, an
 - [ ] Hiding front matter is immediate, global, and adds 24px top padding
 - [ ] Checked / unchecked task boxes
 - [ ] Table, blockquote, inline code, fenced `rust` block
+- [ ] Mermaid flowchart (quiet colors; source is gone, SVG is there)
 - [ ] SVG image
 - [ ] Top bar is only traffic lights + back/forward arrows
 

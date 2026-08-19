@@ -67,6 +67,16 @@ fn main() {
 plain fence
 ```
 
+## Diagram
+
+```mermaid
+flowchart LR
+  Disk[Note on disk] --> Viewer[MarkdownKit]
+  Viewer --> Page[Calm page]
+  Page --> Next[Follow a local link]
+  Next --> Viewer
+```
+
 ## Image
 
 ![Mark](./images/mark.svg)

@@ -337,6 +337,17 @@ kbd,
   line-height: 1.5;
 }
 
+.content .mk-diagram {
+  margin: 0.7em 0 0.9em;
+  overflow: auto;
+}
+
+.content .mk-diagram svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
 .content img {
   max-width: 100%;
   height: auto;

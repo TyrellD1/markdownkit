@@ -9,12 +9,19 @@ markdownkit-serve — serve local markdown as HTML (same renderer as MarkdownKit
 
 USAGE:
   markdownkit-serve [--root DIR] [--bind ADDR]
+  markdownkit-serve --check
+  markdownkit-serve --update
 
   --root DIR   Only serve files under this directory (default: home)
   --bind ADDR  Listen address (default: 127.0.0.1:8787)
+  --check      Print whether a newer GitHub release exists
+  --update     Replace this binary with the latest GitHub release
   -h, --help   Show this help
 
-Open a note:
+Open a note from the home page:
+  http://127.0.0.1:8787/
+
+Or via query string:
   http://127.0.0.1:8787/?path=/absolute/note.md
 
 Settings (this browser only):
@@ -29,6 +36,12 @@ fn main() -> ExitCode {
     if args.iter().any(|arg| arg == "-h" || arg == "--help") {
         print!("{HELP}");
         return ExitCode::SUCCESS;
+    }
+    if args.iter().any(|arg| arg == "--check") {
+        return run_check();
+    }
+    if args.iter().any(|arg| arg == "--update") {
+        return run_update();
     }
 
     let (root, bind) = match parse_args(&args) {
@@ -58,7 +71,8 @@ fn main() -> ExitCode {
     let config = Config { root: root.clone() };
     eprintln!("markdownkit-serve on http://{bind}");
     eprintln!("root {}", root.display());
-    eprintln!("open http://{bind}/?path=/absolute/note.md");
+    eprintln!("open http://{bind}/");
+    spawn_update_notice();
 
     for request in server.incoming_requests() {
         let method = request.method().to_string();
@@ -80,6 +94,78 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+fn spawn_update_notice() {
+    std::thread::spawn(|| {
+        if let Ok(Some(latest)) = markdownkit_update::check(env!("CARGO_PKG_VERSION")) {
+            eprintln!(
+                "markdownkit-serve {} is available (this is {}).\n  {}\n  Update: markdownkit-serve --update",
+                latest.version,
+                env!("CARGO_PKG_VERSION"),
+                latest.html_url
+            );
+        }
+    });
+}
+
+fn run_check() -> ExitCode {
+    match markdownkit_update::check(env!("CARGO_PKG_VERSION")) {
+        Ok(None) => {
+            println!(
+                "markdownkit-serve {} is the latest.",
+                env!("CARGO_PKG_VERSION")
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Some(latest)) => {
+            println!(
+                "markdownkit-serve {} is available (this is {}).\n  {}\n  Update: markdownkit-serve --update",
+                latest.version,
+                env!("CARGO_PKG_VERSION"),
+                latest.html_url
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Could not check for updates: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run_update() -> ExitCode {
+    let latest = match markdownkit_update::fetch_latest() {
+        Ok(latest) => latest,
+        Err(error) => {
+            eprintln!("Could not check for updates: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if !markdownkit_update::is_newer(env!("CARGO_PKG_VERSION"), &latest.version) {
+        println!(
+            "markdownkit-serve {} is already the latest.",
+            env!("CARGO_PKG_VERSION")
+        );
+        return ExitCode::SUCCESS;
+    }
+    let dest = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Could not locate this binary: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    match markdownkit_update::download_serve_update(&latest, &dest) {
+        Ok(()) => {
+            println!("Updated to markdownkit-serve {}.", latest.version);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Could not install the update: {error}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn parse_args(args: &[String]) -> Result<(PathBuf, String), String> {

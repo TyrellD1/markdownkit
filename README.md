@@ -13,7 +13,8 @@ MarkdownKit is a **viewer**. Open a `.md` file, read it, click a link, go back t
 - Renders mermaid fences as diagrams (the library loads only when a note has one)
 - Resolves relative images and in-app links to other markdown files
 - Reloads when the open file changes on disk (optional, in Settings)
-- Appearance, front matter, and live reload in **MarkdownKit → Settings…**
+- Appearance, front matter, live reload, and keep-window-on-top in **MarkdownKit → Settings…**
+- Checks GitHub once on launch; if a newer release exists, a toast links to it
 - Back / forward when following local markdown links
 - **File → Open in Finder** and **Copy File Path**
 - Registers as a macOS viewer so Finder can double-click `.md` files into the app
@@ -59,13 +60,17 @@ cargo build -p markdownkit-serve --release
 ./target/release/markdownkit-serve
 ```
 
-Default root is your home directory; default bind is `127.0.0.1:8787`. Then open:
+Default root is your home directory; default bind is `127.0.0.1:8787`. Open `http://127.0.0.1:8787/` and paste an absolute markdown path (opens a new tab), or go directly to:
 
 ```
 http://127.0.0.1:8787/?path=/absolute/note.md
 ```
 
-`--root DIR` and `--bind HOST:PORT` are available. Theme and front matter are stored in the browser (`/settings`). Put Tailscale Serve in front of localhost. This is not a GitHub Release artifact until one is published.
+`--root DIR` and `--bind HOST:PORT` are available. Theme and front matter are stored in the browser (`/settings`). Put Tailscale Serve in front of localhost.
+
+Apple Silicon builds of `markdownkit-serve` are attached to [GitHub Releases](https://github.com/TyrellD1/markdownkit/releases/latest). Linux: `cargo build -p markdownkit-serve --release` until a Linux asset exists.
+
+`--check` prints whether a newer release exists. `--update` replaces this binary with the matching GitHub asset. On start, the server prints a one-line notice if a newer version is available (no polling).
 
 ## Develop
 
@@ -111,6 +116,7 @@ There is a longer checklist in [DEV_TESTING.md](DEV_TESTING.md).
 ui/                 static viewer (no bundler)
 crates/engine/      shared markdown renderer
 crates/serve/       markdownkit-serve HTTP CLI
+crates/update/      GitHub release check / CLI self-update
 src-tauri/          macOS Tauri app
 examples/           sample notes for manual tests
 docs/               README artwork and source icon

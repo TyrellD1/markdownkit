@@ -1,6 +1,7 @@
 const THEME_KEY = "markdownkit.theme";
 const RELOAD_KEY = "markdownkit.liveReload";
 const FRONTMATTER_KEY = "markdownkit.showFrontmatter";
+const ONTOP_KEY = "markdownkit.alwaysOnTop";
 
 const emptyEl = document.getElementById("empty");
 const pageEl = document.getElementById("page");
@@ -13,10 +14,12 @@ const forwardButton = document.getElementById("forward");
 const settingsEl = document.getElementById("settings");
 const liveReloadEl = document.getElementById("live-reload");
 const showFrontmatterEl = document.getElementById("show-frontmatter");
+const alwaysOnTopEl = document.getElementById("always-on-top");
 
 let currentPath = null;
 let lastFrontmatter = [];
 let toastTimer = 0;
+let toastUrl = null;
 const historyStack = [];
 let historyIndex = -1;
 
@@ -76,6 +79,23 @@ async function persistLiveReload(enabled) {
     /* ignore */
   }
   await api().core.invoke("set_live_reload", { enabled });
+}
+
+function alwaysOnTopEnabled() {
+  try {
+    return localStorage.getItem(ONTOP_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+async function persistAlwaysOnTop(enabled) {
+  try {
+    localStorage.setItem(ONTOP_KEY, String(enabled));
+  } catch {
+    /* ignore */
+  }
+  await api().core.invoke("set_always_on_top", { enabled });
 }
 
 function updateNav() {
@@ -170,18 +190,24 @@ function applyFrontmatterVisibility() {
   pageEl.classList.toggle("is-frontmatter-hidden", !show);
 }
 
-function showToast(message) {
+function showToast(message, options = {}) {
+  const ms = options.ms ?? 2400;
+  toastUrl = options.url || null;
   toastEl.hidden = false;
   toastEl.textContent = message;
+  toastEl.classList.toggle("is-action", Boolean(toastUrl));
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => {
     toastEl.hidden = true;
-  }, 2400);
+    toastEl.classList.remove("is-action");
+    toastUrl = null;
+  }, ms);
 }
 
 function openSettings() {
   liveReloadEl.checked = liveReloadEnabled();
   showFrontmatterEl.checked = showFrontmatterEnabled();
+  alwaysOnTopEl.checked = alwaysOnTopEnabled();
   applyTheme(currentTheme());
   settingsEl.hidden = false;
 }
@@ -281,8 +307,10 @@ async function boot() {
 
   liveReloadEl.checked = liveReloadEnabled();
   showFrontmatterEl.checked = showFrontmatterEnabled();
+  alwaysOnTopEl.checked = alwaysOnTopEnabled();
   applyFrontmatterVisibility();
   await persistLiveReload(liveReloadEl.checked);
+  await persistAlwaysOnTop(alwaysOnTopEl.checked);
 
   openButton.addEventListener("click", () => {
     pickFile().catch((error) => showToast(String(error)));
@@ -298,6 +326,12 @@ async function boot() {
   });
   showFrontmatterEl.addEventListener("change", () => {
     persistShowFrontmatter(showFrontmatterEl.checked);
+  });
+  alwaysOnTopEl.addEventListener("change", () => {
+    persistAlwaysOnTop(alwaysOnTopEl.checked).catch((error) => showToast(String(error)));
+  });
+  toastEl.addEventListener("click", () => {
+    if (toastUrl) api().opener.openUrl(toastUrl);
   });
   for (const button of document.querySelectorAll(".seg [data-theme]")) {
     button.addEventListener("click", () => applyTheme(button.dataset.theme));
@@ -357,6 +391,20 @@ async function boot() {
   if (pending) {
     await openPath(pending);
   }
+
+  api()
+    .core.invoke("check_for_update")
+    .then((info) => {
+      if (info && info.version) {
+        showToast(`Version ${info.version} is available`, {
+          ms: 6000,
+          url: info.url,
+        });
+      }
+    })
+    .catch(() => {
+      /* offline or GitHub unreachable */
+    });
 }
 
 boot();

@@ -60,5 +60,5 @@ cargo test --workspace
 On a machine without the Tauri GUI stack:
 
 ```sh
-cargo test -p markdownkit-engine -p markdownkit-serve
+cargo test -p markdownkit-engine -p markdownkit-serve -p markdownkit-update
 ```

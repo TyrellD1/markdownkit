@@ -36,7 +36,7 @@ Equivalent:
 cargo test --workspace
 ```
 
-Run them after any change to `crates/engine` or `crates/serve`.
+Run them after any change to `crates/engine`, `crates/serve`, or `crates/update`.
 
 ## Run the app
 
@@ -50,7 +50,7 @@ Expected:
 - Empty state titled **markdownkit**
 - No document title in the top bar
 - `⌘O` or the **Open a file** button opens a native picker
-- **MarkdownKit → Settings…** (`⌘,`) opens appearance, front matter, and live reload
+- **MarkdownKit → Settings…** (`⌘,`) opens appearance, front matter, live reload, and always-on-top
 
 Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, mermaid, and links.
 
@@ -74,6 +74,8 @@ Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, me
 - [ ] Settings can force light, dark, or system
 - [ ] **Show front matter** hides or shows YAML properties on every file
 - [ ] Turning off live reload stops disk updates; turning it on restores them
+- [ ] **Keep window on top** stays above other windows until turned off
+- [ ] If GitHub has a newer release, a toast appears once on launch (click opens the release page)
 - [ ] In-page `#` links still scroll when present
 - [ ] `https://` links leave the app (default browser)
 - [ ] Drop `examples/welcome.md` onto the window

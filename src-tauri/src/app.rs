@@ -148,6 +148,39 @@ pub fn set_live_reload(
 }
 
 #[tauri::command]
+pub fn set_always_on_top(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Window not found.".to_string())?;
+    window
+        .set_always_on_top(enabled)
+        .map_err(|err| err.to_string())
+}
+
+#[derive(Clone, Serialize)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub url: String,
+}
+
+#[tauri::command]
+pub async fn check_for_update() -> Result<Option<UpdateInfo>, String> {
+    let result = tauri::async_runtime::spawn_blocking(|| {
+        markdownkit_update::check(env!("CARGO_PKG_VERSION"))
+    })
+    .await
+    .map_err(|err| err.to_string())?;
+
+    match result {
+        Ok(Some(latest)) => Ok(Some(UpdateInfo {
+            version: latest.version,
+            url: latest.html_url,
+        })),
+        Ok(None) | Err(_) => Ok(None),
+    }
+}
+
+#[tauri::command]
 pub fn reveal_in_finder(state: State<'_, AppState>) -> Result<(), String> {
     let path = state.current_path()?;
     let status = Command::new("open")

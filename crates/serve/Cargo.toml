@@ -11,5 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 markdownkit-engine = { path = "../engine" }
+markdownkit-update = { path = "../update" }
 tiny_http = "0.12"
 urlencoding = "2"

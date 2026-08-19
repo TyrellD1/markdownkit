@@ -58,7 +58,7 @@ Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, an
 
 - [ ] Serif H1, sans body, ~720px column
 - [ ] Frontmatter shown as a quiet property list when Settings → Show front matter is on
-- [ ] Hiding front matter is immediate, global, and adds 16px top padding
+- [ ] Hiding front matter is immediate, global, and adds 24px top padding
 - [ ] Checked / unchecked task boxes
 - [ ] Table, blockquote, inline code, fenced `rust` block
 - [ ] SVG image

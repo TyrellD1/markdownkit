@@ -192,7 +192,7 @@ kbd,
 }
 
 .page.is-frontmatter-hidden {
-  padding-top: 32px;
+  padding-top: 40px;
 }
 
 .props {
@@ -488,7 +488,7 @@ kbd,
   }
 
   .page.is-frontmatter-hidden {
-    padding-top: 28px;
+    padding-top: 36px;
   }
 
   .content h1 {

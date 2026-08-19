@@ -38,13 +38,21 @@ npm run dev
 
 Then **File → Open** (`⌘O`) and choose `examples/welcome.md` or `examples/kitchen-sink.md`. You can also drop a markdown file onto the window.
 
-To build the `.app`:
+To install on this Mac from source:
+
+```sh
+./scripts/install.sh
+```
+
+That builds the release `.app` and copies it to `/Applications`. Same thing: `npm run install-app`.
+
+Or build only, then drag the app yourself:
 
 ```sh
 npm run build
 ```
 
-The app bundle is written under `src-tauri/target/release/bundle/macos/`. Drag **MarkdownKit.app** into `/Applications`.
+The bundle lands at `src-tauri/target/release/bundle/macos/MarkdownKit.app`. There is no Homebrew cask or signed DMG yet — install is “build locally, put the `.app` in Applications.”
 
 ## Open `.md` files from Finder
 

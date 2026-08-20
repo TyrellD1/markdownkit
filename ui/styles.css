@@ -430,7 +430,7 @@ kbd,
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--elevated);
+  background: var(--bg);
   color: var(--muted);
   cursor: pointer;
 }
@@ -453,7 +453,7 @@ kbd,
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: var(--elevated);
+  background: var(--bg);
 }
 
 .mk-diagram-modal-close {

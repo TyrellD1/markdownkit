@@ -1,6 +1,6 @@
 [package]
 name = "markdownkit-update"
-version = "0.2.0"
+version = "0.3.0"
 description = "GitHub release check and CLI self-update"
 edition = "2021"
 license = "MIT"

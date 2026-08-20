@@ -2121,7 +2121,7 @@ checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 
 [[package]]
 name = "markdownkit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "markdownkit-engine",
  "markdownkit-update",
@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "markdownkit-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ammonia",
  "pulldown-cmark",
@@ -2146,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "markdownkit-serve"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "markdownkit-engine",
@@ -2157,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "markdownkit-update"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",

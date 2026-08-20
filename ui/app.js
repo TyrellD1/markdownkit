@@ -338,9 +338,10 @@ async function boot() {
   }
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !settingsEl.hidden) {
-      closeSettings();
-    }
+    if (event.key !== "Escape") return;
+    const diagramModal = document.getElementById("mk-diagram-modal");
+    if (diagramModal && !diagramModal.hidden) return;
+    if (!settingsEl.hidden) closeSettings();
   });
 
   document.addEventListener("click", async (event) => {

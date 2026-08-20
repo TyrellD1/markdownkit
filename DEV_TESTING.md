@@ -62,6 +62,7 @@ Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, me
 - [ ] Checked / unchecked task boxes
 - [ ] Table, blockquote, inline code, fenced `rust` block
 - [ ] Mermaid flowchart (quiet colors; source is gone, SVG is there)
+- [ ] Mermaid expand control is always visible; click fills the window (25px inset, rounded); Escape or the 25px margin closes it
 - [ ] SVG image
 - [ ] Top bar is only traffic lights + back/forward arrows
 

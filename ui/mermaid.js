@@ -99,11 +99,88 @@ function loadMermaid() {
   return mermaidLoader;
 }
 
+const EXPAND_ICON = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+  <path d="M4.5 2H2v2.5M7.5 2H10v2.5M4.5 10H2V7.5M7.5 10H10V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+let diagramExpandBound = false;
+
+function closeDiagramModal() {
+  const modal = document.getElementById("mk-diagram-modal");
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  const stage = modal.querySelector(".mk-diagram-modal-stage");
+  if (stage) stage.replaceChildren();
+}
+
+function ensureDiagramModal() {
+  let modal = document.getElementById("mk-diagram-modal");
+  if (modal) return modal;
+  modal = document.createElement("div");
+  modal.id = "mk-diagram-modal";
+  modal.className = "mk-diagram-modal";
+  modal.hidden = true;
+  modal.innerHTML =
+    '<div class="mk-diagram-modal-card" role="dialog" aria-modal="true" aria-label="Diagram">' +
+    '<button type="button" class="mk-diagram-modal-close" aria-label="Close">' +
+    '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">' +
+    '<path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>' +
+    "</svg></button>" +
+    '<div class="mk-diagram-modal-stage"></div></div>';
+  document.body.append(modal);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal || event.target.closest(".mk-diagram-modal-close")) {
+      closeDiagramModal();
+    }
+  });
+  return modal;
+}
+
+function openDiagramModal(svg) {
+  const modal = ensureDiagramModal();
+  const stage = modal.querySelector(".mk-diagram-modal-stage");
+  const clone = svg.cloneNode(true);
+  clone.removeAttribute("width");
+  clone.removeAttribute("height");
+  clone.style.width = "100%";
+  clone.style.height = "100%";
+  clone.style.maxWidth = "none";
+  stage.replaceChildren(clone);
+  modal.hidden = false;
+}
+
+function addDiagramExpand(holder) {
+  if (!holder.querySelector("svg") || holder.querySelector(".mk-diagram-expand")) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "mk-diagram-expand";
+  button.setAttribute("aria-label", "View diagram larger");
+  button.innerHTML = EXPAND_ICON;
+  holder.append(button);
+}
+
+function bindDiagramExpand() {
+  if (diagramExpandBound) return;
+  diagramExpandBound = true;
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest(".mk-diagram-expand");
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const svg = button.closest(".mk-diagram")?.querySelector("svg");
+    if (svg) openDiagramModal(svg);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeDiagramModal();
+  });
+}
+
 async function renderMermaid(root) {
   if (!root) return;
   const pending = [...root.querySelectorAll("pre > code")].filter(isMermaidFence);
   const holders = [...root.querySelectorAll(".mk-diagram")];
   if (!pending.length && !holders.length) return;
+  closeDiagramModal();
 
   const seq = ++mermaidSeq;
   let mermaid;
@@ -145,6 +222,7 @@ async function renderMermaid(root) {
       if (seq !== mermaidSeq) return;
       holder.replaceChildren();
       holder.insertAdjacentHTML("afterbegin", svg);
+      addDiagramExpand(holder);
     } catch {
       if (seq !== mermaidSeq) return;
       holder.replaceChildren();
@@ -155,4 +233,5 @@ async function renderMermaid(root) {
       holder.append(pre);
     }
   }
+  bindDiagramExpand();
 }

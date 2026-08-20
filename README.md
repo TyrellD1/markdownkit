@@ -10,7 +10,7 @@ MarkdownKit is a **viewer**. Open a `.md` file, read it, click a link, go back t
 
 - Opens local markdown (`.md`, `.markdown`, `.mdown`, `.mkd`)
 - Renders GFM basics: headings, lists, task lists, tables, strike, footnotes, fenced code
-- Renders mermaid fences as diagrams (the library loads only when a note has one)
+- Renders mermaid fences as diagrams (the library loads only when a note has one; expand fills the window)
 - Resolves relative images and in-app links to other markdown files
 - Reloads when the open file changes on disk (optional, in Settings)
 - Appearance, front matter, live reload, and keep-window-on-top in **MarkdownKit → Settings…**

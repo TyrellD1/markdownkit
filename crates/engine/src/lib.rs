@@ -130,6 +130,65 @@ fn find_frontmatter_end(after_open: &str) -> Option<usize> {
     })
 }
 
+/// Split off the raw frontmatter block, including the delimiters and any
+/// leading BOM, returning `(Some(prefix), body)` when valid frontmatter is
+/// present. The prefix is preserved byte-for-byte so an edited body can be
+/// spliced back without normalizing the YAML (comments, quoting, spacing).
+pub fn split_frontmatter_raw(source: &str) -> (Option<&str>, &str) {
+    let bom_len = if source.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+    let rest = &source[bom_len..];
+    let Some(after_open) = rest.strip_prefix("---") else {
+        return (None, source);
+    };
+    let after_open = after_open.strip_prefix('\r').unwrap_or(after_open);
+    let Some(after_open) = after_open.strip_prefix('\n') else {
+        return (None, source);
+    };
+    let Some(rel_end) = find_frontmatter_end(after_open) else {
+        return (None, source);
+    };
+    // rel_end points at the first `-` of the closing fence within after_open.
+    let mut end = rel_end + "---".len();
+    let bytes = after_open.as_bytes();
+    if bytes.get(end) == Some(&b'\r') {
+        end += 1;
+    }
+    if bytes.get(end) == Some(&b'\n') {
+        end += 1;
+    }
+    let head_len = source.len() - after_open.len();
+    let prefix_end = head_len + end;
+    (Some(&source[..prefix_end]), &source[prefix_end..])
+}
+
+/// Rebuild a file after its body was edited, preserving the original
+/// frontmatter block byte-for-byte. When the file has no frontmatter the
+/// new body is returned as-is (with a single trailing newline).
+pub fn replace_body(original: &str, new_body: &str) -> String {
+    let ensure_trailing_newline = |mut out: String| {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out
+    };
+    match split_frontmatter_raw(original) {
+        (Some(prefix), _) => {
+            let mut out = String::with_capacity(prefix.len() + new_body.len() + 2);
+            out.push_str(prefix);
+            if !prefix.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(new_body);
+            ensure_trailing_newline(out)
+        }
+        (None, _) => ensure_trailing_newline(new_body.to_string()),
+    }
+}
+
 fn parse_simple_yaml(yaml: &str) -> Vec<FrontmatterField> {
     let mut fields = Vec::new();
     for line in yaml.lines() {
@@ -661,6 +720,51 @@ mod tests {
     fn quoted_frontmatter_values() {
         let (fields, _) = split_frontmatter("---\ntitle: \"Quoted: value\"\n---\n\n");
         assert_eq!(fields[0].value, "Quoted: value");
+    }
+
+    #[test]
+    fn raw_frontmatter_split_preserves_prefix() {
+        let source = "---\n# comment\ntitle: \"Q: v\"\n---\n# Body\n";
+        let (prefix, body) = split_frontmatter_raw(source);
+        assert_eq!(prefix, Some("---\n# comment\ntitle: \"Q: v\"\n---\n"));
+        assert_eq!(body, "# Body\n");
+    }
+
+    #[test]
+    fn raw_frontmatter_split_keeps_bom() {
+        let source = "\u{feff}---\nauthor: Ada\n---\nHi\n";
+        let (prefix, body) = split_frontmatter_raw(source);
+        assert!(prefix.unwrap().starts_with("\u{feff}---\n"));
+        assert_eq!(body, "Hi\n");
+    }
+
+    #[test]
+    fn raw_frontmatter_split_rejects_unclosed() {
+        let source = "---\nnot closed\n# Heading\n";
+        assert_eq!(split_frontmatter_raw(source), (None, source));
+    }
+
+    #[test]
+    fn replace_body_preserves_frontmatter_bytes() {
+        let original = "---\n# keep me\ntitle: \"Q: v\"\n---\nOld body\n";
+        assert_eq!(
+            replace_body(original, "# New\n"),
+            "---\n# keep me\ntitle: \"Q: v\"\n---\n# New\n"
+        );
+    }
+
+    #[test]
+    fn replace_body_without_frontmatter() {
+        assert_eq!(replace_body("Old\n", "# New"), "# New\n");
+        assert_eq!(replace_body("Old\n", ""), "");
+    }
+
+    #[test]
+    fn replace_body_handles_crlf_fences() {
+        let original = "---\r\ntitle: T\r\n---\r\nOld\r\n";
+        let (prefix, _) = split_frontmatter_raw(original);
+        assert_eq!(prefix, Some("---\r\ntitle: T\r\n---\r\n"));
+        assert_eq!(replace_body(original, "New\r\n"), "---\r\ntitle: T\r\n---\r\nNew\r\n");
     }
 
     #[test]

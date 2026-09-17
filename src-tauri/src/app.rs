@@ -147,6 +147,47 @@ pub fn set_live_reload(
     }
 }
 
+/// Save an edited markdown body. `body` is the document without frontmatter;
+/// the file's existing frontmatter block (if any) is preserved byte-for-byte.
+/// Only the currently open file can be saved. The write is atomic (sibling
+/// temp file plus rename) and the watcher's own echo is suppressed so the
+/// editor keeps its caret instead of reloading.
+#[tauri::command]
+pub fn save_document(
+    state: State<'_, AppState>,
+    path: String,
+    body: String,
+) -> Result<RenderedDocument, String> {
+    let path = PathBuf::from(path);
+    if !markdown::is_markdown_path(&path) {
+        return Err("MarkdownKit saves .md, .markdown, .mdown, and .mkd files.".into());
+    }
+    let current = state.current_path()?;
+    if current != path {
+        return Err("Only the open file can be saved.".into());
+    }
+    let original = std::fs::read_to_string(&path).map_err(|err| err.to_string())?;
+    let full = markdown::replace_body(&original, &body);
+    write_atomic(&path, &full)?;
+    // Swallow the file-changed echo this write is about to trigger; the
+    // editor already shows the new content.
+    *state.last_emit.lock().expect("debounce lock") = Instant::now();
+    Ok(markdown::render(&full, &path))
+}
+
+fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Could not save this file.".to_string())?;
+    let tmp = path.with_file_name(format!(".{}.tmp-{}", file_name, std::process::id()));
+    std::fs::write(&tmp, content).map_err(|err| err.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|err| {
+        let _ = std::fs::remove_file(&tmp);
+        err.to_string()
+    })
+}
+
 #[tauri::command]
 pub fn set_always_on_top(app: AppHandle, enabled: bool) -> Result<(), String> {
     let window = app

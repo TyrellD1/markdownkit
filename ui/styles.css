@@ -602,6 +602,22 @@ kbd,
   margin-top: 4px;
 }
 
+/* Inline editing: the rendered nodes are the fields, so editing adds no
+   chrome of its own. Only the caret shows; the browser's focus ring would
+   be visual noise, and task boxes become clickable only while armed. */
+.content [contenteditable="plaintext-only"]:focus,
+.content [contenteditable="true"]:focus {
+  outline: none;
+}
+
+.content li.task > input[type="checkbox"] {
+  cursor: default;
+}
+
+.page.is-editing .content li.task > input[type="checkbox"] {
+  cursor: pointer;
+}
+
 .toast {
   position: fixed;
   left: 50%;

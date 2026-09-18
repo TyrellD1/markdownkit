@@ -633,14 +633,36 @@ function serializeBody() {
 
 // --- Inline editing: caret, keymap, save ------------------------------------
 
-// The prose line around the caret: the nearest paragraph, heading, or list
-// item. Returns null inside code, tables, and other non-prose shapes, where
-// typing stays plain and no shortcut applies.
+// The prose line around the caret: the nearest paragraph, heading, list
+// item, or unstyled browser div. Plain DIVs are included because WebKit
+// emits them around splits (especially inside list items and quotes); a line
+// the editor cannot see would silently swallow every shortcut typed in it.
+// Code, tables, and diagram islands never match: typing there stays plain.
 function editableLineOf(node) {
   if (!node) return null;
   const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
-  const line = el?.closest?.("p, h1, h2, h3, h4, h5, h6, li");
-  return line && contentEl.contains(line) ? line : null;
+  const line = el?.closest?.("p, h1, h2, h3, h4, h5, h6, li, div");
+  if (!line || !contentEl.contains(line)) return null;
+  if (line.tagName === "DIV") {
+    if (line.closest("pre, table, .mk-diagram")) return null;
+    // Footnote definition containers are storage, not prose lines.
+    if (!line.className && line.id && line.querySelector(":scope > sup")) return null;
+    const parent = line.parentElement;
+    if (
+      parent !== contentEl &&
+      parent?.tagName !== "LI" &&
+      parent?.tagName !== "BLOCKQUOTE"
+    ) {
+      return null;
+    }
+  }
+  return line;
+}
+
+// A DIV line behaves as a paragraph for conversions; replacements swap it
+// for the real element, so no unstyled div survives a shortcut.
+function isParagraphLike(block) {
+  return block.tagName === "P" || block.tagName === "DIV";
 }
 
 function topLevelBlock(node) {
@@ -782,7 +804,7 @@ function makeTaskCheckbox(checked) {
 }
 
 function onSpacePrefix(event, block) {
-  if ((block.tagName !== "P" && !/^H[1-6]$/.test(block.tagName)) || block.closest("li")) return;
+  if ((!isParagraphLike(block) && !/^H[1-6]$/.test(block.tagName)) || block.closest("li")) return;
   const offset = caretOffsetIn(block);
   if (offset == null) return;
   const before = block.textContent.slice(0, offset);
@@ -795,7 +817,7 @@ function onSpacePrefix(event, block) {
   };
   const heading = before.match(/^(#{1,6})$/);
   if (heading) convert(() => convertParagraphToHeading(block, heading[1].length));
-  else if (block.tagName !== "P") return;
+  else if (!isParagraphLike(block)) return;
   else if (/^(-|\*|\+)$/.test(before)) convert(() => wrapParagraphInList(block, "UL", false));
   else if (/^1\.$/.test(before)) convert(() => wrapParagraphInList(block, "OL", false));
   else if (/^(\[\]|\[x\])$/i.test(before)) {
@@ -866,7 +888,7 @@ function exitListToParagraph(li) {
 
 function onEnterKey(event, block) {
   if (event.shiftKey) return; // Shift+Enter stays a soft break (<br>)
-  if (block.tagName === "P" && !block.closest("li") && block.textContent.trim() === "---") {
+  if (isParagraphLike(block) && !block.closest("li") && block.textContent.trim() === "---") {
     event.preventDefault();
     const hr = document.createElement("hr");
     const p = newBlock("p");
@@ -882,7 +904,7 @@ function onEnterKey(event, block) {
     return;
   }
   // ```lang + Enter opens a real code block; the fence never shows as text.
-  if (block.tagName === "P" && !block.closest("li, blockquote, table, pre")) {
+  if (isParagraphLike(block) && !block.closest("li, blockquote, table, pre")) {
     const fence = block.textContent.match(/^```([\w+-]*)$/);
     if (fence && caretAtEnd(event, block)) {
       event.preventDefault();
@@ -909,10 +931,12 @@ function onEnterKey(event, block) {
       p.append(...line.childNodes);
       line.replaceWith(p);
       setCaretToStart(p);
-    } else if (!line && top.tagName === "DIV" && top.parentElement === contentEl) {
+    } else if (line && line.tagName === "DIV") {
+      // A stray browser div (nested splits WebKit leaves behind) becomes a
+      // real paragraph so later shortcuts keep working in it.
       const p = newBlock("p");
-      p.append(...top.childNodes);
-      top.replaceWith(p);
+      p.append(...line.childNodes);
+      line.replaceWith(p);
       setCaretToStart(p);
     } else if (line && line.tagName === "LI" && line.classList.contains("task") && !line.textContent.trim()) {
       const box = line.querySelector(":scope > input[type='checkbox']");
@@ -1302,9 +1326,51 @@ function onEditInput(event) {
   const sel = window.getSelection();
   const line = sel.rangeCount ? editableLineOf(sel.anchorNode) : null;
   if (line && /^H[1-6]$/.test(line.tagName) && line.dataset.mkAutoId) updateAutoHeadingId(line);
-  if (event.inputType === "insertText" && typeof event.data === "string" && /[\s.,;:!?)]/.test(event.data)) {
-    tryConvertInline();
+  if (event.inputType !== "insertText" || typeof event.data !== "string") return;
+  // Belt and suspenders with the keydown prefix check: if the keydown ever
+  // misses (IME commit, mobile keyboard, unhandled path), the freshly typed
+  // space still converts the line a frame later. When keydown already
+  // converted, the markers are gone and this is a no-op.
+  if (event.data === " " && tryConvertBlockPrefixFromInput()) return;
+  if (/[\s.,;:!?)]/.test(event.data)) tryConvertInline();
+}
+
+// Same conversions as onSpacePrefix, but for a space that already landed in
+// the DOM. Matches only when the text before the caret is exactly the prefix
+// plus that space, so mid-line spaces never trigger.
+function tryConvertBlockPrefixFromInput() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return false;
+  const node = sel.anchorNode;
+  if (!node) return false;
+  const line = editableLineOf(node);
+  if (!line || !contentEl.contains(line)) return false;
+  if (line.closest("li")) return false;
+  const text = line.textContent;
+  const offset = caretOffsetIn(line);
+  if (offset == null) return false;
+  const before = text.slice(0, offset);
+  const rest = text.slice(offset);
+  const convert = (fn) => {
+    line.textContent = rest;
+    markDirty();
+    fn();
+  };
+  let match;
+  if ((match = before.match(/^(#{1,6}) $/))) {
+    if (!isParagraphLike(line) && !/^H[1-6]$/.test(line.tagName)) return false;
+    convert(() => convertParagraphToHeading(line, match[1].length));
+    return true;
   }
+  if (!isParagraphLike(line)) return false;
+  if (/^(-|\*|\+) $/.test(before)) convert(() => wrapParagraphInList(line, "UL", false));
+  else if (/^1\. $/.test(before)) convert(() => wrapParagraphInList(line, "OL", false));
+  else if (/^(\[\]|\[x\]) $/i.test(before)) {
+    convert(() => wrapParagraphInList(line, "UL", true, /x\] $/i.test(before)));
+  } else if (/^> $/.test(before) && !line.closest("blockquote")) {
+    convert(() => wrapParagraphInBlockquote(line));
+  } else return false;
+  return true;
 }
 
 function tryConvertInline() {

@@ -207,6 +207,9 @@ async function renderMermaid(root) {
     const holder = document.createElement("div");
     holder.className = "mk-diagram";
     holder.dataset.mermaid = code.textContent || "";
+    // Diagrams are read-only islands when the page is editable: the source
+    // fence (double-click the diagram) is what serializes back on save.
+    holder.setAttribute("contenteditable", "false");
     pre.replaceWith(holder);
   }
   if (seq !== mermaidSeq) return;

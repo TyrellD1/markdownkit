@@ -50,7 +50,7 @@ Expected:
 - Empty state titled **markdownkit**
 - No document title in the top bar
 - `⌘O` or the **Open a file** button opens a native picker
-- **MarkdownKit → Settings…** (`⌘,`) opens appearance, front matter, live reload, and always-on-top
+- **MarkdownKit → Settings…** (`⌘,`) opens appearance, front matter, live reload, always-on-top, and inline editing
 
 Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, mermaid, and links.
 
@@ -83,9 +83,23 @@ Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, me
 - [ ] Edit `welcome.md` on disk → viewer reloads without a full restage
 - [ ] Opening a `.txt` file is rejected with a toast
 
+### Editing checklist (Settings → Allow inline editing)
+
+- [ ] With the setting off, the page is unchanged: no caret, no extra listeners
+- [ ] With it on, clicking any paragraph, heading, list item, or quote puts a caret there and typing works; arrows and clicks move freely across blocks
+- [ ] Typing `## `, `- `, `1. `, `[] `, `> `, ` ```rust ` turns the line into that block in real time; `**bold** `, `` `code` ``, `[t](u)` convert as you type
+- [ ] `Enter` splits a block; empty list item + `Enter` exits the list; `Tab` indents list items
+- [ ] Clicking a task checkbox toggles it and it is saved automatically
+- [ ] Edits reach the file ~150ms after you stop typing with no re-render, caret jump, or flicker; the file on disk matches what you see
+- [ ] Footnote numbers, fresh diagrams/tables, and explicit `{#ids}` reconcile after ~5s of true idle, keeping caret and scroll
+- [ ] `⌘S` forces an immediate save; `Esc` reverts to the disk version
+- [ ] No stray `\` characters appear after splitting headings or list items and waiting
+- [ ] Code, tables, diagrams, and footnotes are read-only in place and survive a save unchanged (double-click a diagram to edit its source)
+- [ ] `examples/kitchen-sink.md` still renders identically after a no-op save (type a space, delete it, wait a second)
+
 ### Idle cost
 
-With a document open and the window in the background, Activity Monitor should show **MarkdownKit** near 0% CPU. There is no poll loop; disk changes use FSEvents on the current file’s folder only.
+With a document open and the window in the background, Activity Monitor should show **MarkdownKit** near 0% CPU. There is no poll loop; disk changes use FSEvents on the current file’s folder only. Inline editing adds no timers either: conversions run on keystrokes, and a single one-shot timer arms only between typing and the next autosave.
 
 ## Production build and Finder
 

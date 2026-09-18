@@ -13,7 +13,8 @@ MarkdownKit is a **viewer**. Open a `.md` file, read it, click a link, go back t
 - Renders mermaid fences as diagrams (the library loads only when a note has one; expand fills the window)
 - Resolves relative images and in-app links to other markdown files
 - Reloads when the open file changes on disk (optional, in Settings)
-- Appearance, front matter, live reload, and keep-window-on-top in **MarkdownKit → Settings…**
+- Edits the open file inline when enabled in Settings (click any text and type; saves as you type, `Esc` reverts to the disk version)
+- Appearance, front matter, live reload, keep-window-on-top, and inline editing in **MarkdownKit → Settings…**
 - Checks GitHub once on launch; if a newer release exists, a toast links to it
 - Back / forward when following local markdown links
 - **File → Open in Finder** and **Copy File Path**

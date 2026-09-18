@@ -602,6 +602,15 @@ kbd,
   margin-top: 4px;
 }
 
+/* Inline editing: the rendered nodes are the fields, so editing adds no
+   chrome of its own. Only the caret shows; the browser's focus ring would
+   be visual noise, and it is suppressed for the same reason. Edit mode and
+   read mode are pixel-identical by construction. */
+.content[contenteditable]:focus,
+.content [contenteditable]:focus {
+  outline: none;
+}
+
 .toast {
   position: fixed;
   left: 50%;

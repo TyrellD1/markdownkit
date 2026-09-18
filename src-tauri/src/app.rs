@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -65,6 +65,26 @@ struct FilePayload {
     path: String,
 }
 
+/// A freshly read document plus its modification time, so the editor can
+/// detect disk changes made elsewhere and never silently overwrite them.
+#[derive(Clone, Serialize)]
+pub struct OpenedDocument {
+    pub doc: RenderedDocument,
+    pub mtime_ms: u64,
+}
+
+fn mtime_ms(path: &Path) -> Result<u64, String> {
+    let modified = path
+        .metadata()
+        .map_err(|err| err.to_string())?
+        .modified()
+        .map_err(|err| err.to_string())?;
+    modified
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| err.to_string())
+        .map(|age| age.as_millis() as u64)
+}
+
 pub fn remember_path(app: &AppHandle, path: PathBuf) {
     let state = app.state::<AppState>();
     state.set_pending(path.clone());
@@ -104,9 +124,14 @@ pub fn open_document(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
-) -> Result<RenderedDocument, String> {
+) -> Result<OpenedDocument, String> {
     let path = PathBuf::from(path);
-    open_path(&app, &state, path)
+    let doc = open_path(&app, &state, path.clone())?;
+    let mtime = mtime_ms(&path)?;
+    Ok(OpenedDocument {
+        doc,
+        mtime_ms: mtime,
+    })
 }
 
 pub fn open_path(
@@ -145,6 +170,113 @@ pub fn set_live_reload(
             Ok(())
         }
     }
+}
+
+/// Save an edited markdown body. `body` is the document without frontmatter;
+/// the file's existing frontmatter block (if any) is preserved byte-for-byte.
+/// Only the currently open file can be saved. Unless `force` is set, the save
+/// is refused with a `CONFLICT: ...` error when the file changed on disk
+/// since `expected_mtime_ms`, so an autosave never overwrites external edits.
+/// The write is atomic (sibling temp file plus rename) and the watcher's own
+/// echo is suppressed so the editor keeps its caret instead of reloading.
+#[tauri::command]
+pub fn save_document(
+    state: State<'_, AppState>,
+    path: String,
+    body: String,
+    expected_mtime_ms: Option<u64>,
+    force: bool,
+) -> Result<OpenedDocument, String> {
+    let path = PathBuf::from(path);
+    if !markdown::is_markdown_path(&path) {
+        return Err("MarkdownKit saves .md, .markdown, .mdown, and .mkd files.".into());
+    }
+    let current = state.current_path()?;
+    if current != path {
+        return Err("Only the open file can be saved.".into());
+    }
+    if !force {
+        match mtime_ms(&path) {
+            Ok(on_disk) => {
+                if expected_mtime_ms.is_some_and(|expected| expected != on_disk) {
+                    return Err("CONFLICT: the file changed on disk.".into());
+                }
+            }
+            Err(_) => {
+                if expected_mtime_ms.is_some() {
+                    return Err("CONFLICT: the file changed on disk.".into());
+                }
+            }
+        }
+    }
+    let original = std::fs::read_to_string(&path).map_err(|err| err.to_string())?;
+    let full = markdown::replace_body(&original, &body);
+    write_atomic(&path, &full)?;
+    // Swallow the file-changed echo this write is about to trigger; the
+    // editor already shows the new content.
+    *state.last_emit.lock().expect("debounce lock") = Instant::now();
+    let rendered = markdown::render(&full, &path);
+    let mtime = mtime_ms(&path)?;
+    Ok(OpenedDocument {
+        doc: rendered,
+        mtime_ms: mtime,
+    })
+}
+
+/// Fast sync-only write: same guards and atomicity as `save_document`, but no
+/// rendering. The editor's DOM is already the view, so re-rendering on every
+/// save would just churn the page (caret jumps, flicker). Skips the write
+/// entirely when the content is unchanged, keeping mtime stable.
+#[tauri::command]
+pub fn write_document(
+    state: State<'_, AppState>,
+    path: String,
+    body: String,
+    expected_mtime_ms: Option<u64>,
+    force: bool,
+) -> Result<u64, String> {
+    let path = PathBuf::from(path);
+    if !markdown::is_markdown_path(&path) {
+        return Err("MarkdownKit saves .md, .markdown, .mdown, and .mkd files.".into());
+    }
+    let current = state.current_path()?;
+    if current != path {
+        return Err("Only the open file can be saved.".into());
+    }
+    if !force {
+        match mtime_ms(&path) {
+            Ok(on_disk) => {
+                if expected_mtime_ms.is_some_and(|expected| expected != on_disk) {
+                    return Err("CONFLICT: the file changed on disk.".into());
+                }
+            }
+            Err(_) => {
+                if expected_mtime_ms.is_some() {
+                    return Err("CONFLICT: the file changed on disk.".into());
+                }
+            }
+        }
+    }
+    let original = std::fs::read_to_string(&path).map_err(|err| err.to_string())?;
+    let full = markdown::replace_body(&original, &body);
+    if full != original {
+        write_atomic(&path, &full)?;
+        *state.last_emit.lock().expect("debounce lock") = Instant::now();
+    }
+    mtime_ms(&path)
+}
+
+fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Could not save this file.".to_string())?;
+    let tmp = path.with_file_name(format!(".{}.tmp-{}", file_name, std::process::id()));
+    std::fs::write(&tmp, content).map_err(|err| err.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|err| {
+        let _ = std::fs::remove_file(&tmp);
+        err.to_string()
+    })
 }
 
 #[tauri::command]
@@ -335,4 +467,49 @@ pub fn build_menu(app: &tauri::App) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
     Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &view_menu])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_note(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mk-app-test-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn atomic_write_round_trips() {
+        let path = temp_note("note.md");
+        write_atomic(&path, "# Hello\n").expect("write");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Hello\n");
+        write_atomic(&path, "# Edited\n").expect("rewrite");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Edited\n");
+        assert!(mtime_ms(&path).unwrap() > 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn atomic_write_leaves_no_tmp_behind() {
+        let path = temp_note("clean.md");
+        write_atomic(&path, "x\n").expect("write");
+        let sibling_tmp = path
+            .parent()
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".clean.md.tmp-")
+            });
+        assert!(!sibling_tmp);
+        let _ = std::fs::remove_file(&path);
+    }
 }

@@ -31,11 +31,14 @@ let isDirty = false;
 let editSeq = 0;
 let isComposing = false;
 let conflictPending = false;
-let autosaveTimer = 0;
-// Autosave waits for a full second of quiet after the last keystroke, then
-// fires once. There is no interval and no work while idle: the timer only
-// ever exists transiently between typing and saving.
-const AUTOSAVE_MS = 1000;
+let syncTimer = 0;
+let reconcileTimer = 0;
+// Sync waits ~150ms of quiet after the last keystroke, then fires once.
+// Reconcile waits 5s of true idle and only runs when the body holds
+// engine-derived structures. There is no interval and no work while idle:
+// each timer only ever exists transiently.
+const SYNC_MS = 150;
+const RECONCILE_MS = 5000;
 const historyStack = [];
 let historyIndex = -1;
 
@@ -131,15 +134,15 @@ function persistEditing(enabled) {
   applyEditingToCurrentDocument();
 }
 
-// Reset the open document to its last-saved baseline, then arm rich-text
-// editing when the setting is on. Toggling the setting discards unsaved
-// keystrokes by design: the viewer is the source of truth until ⌘S.
+// Arm or disarm in place: the DOM is never reset here, so toggling the
+// setting keeps whatever is on screen (synced to disk within ~150ms anyway).
 function applyEditingToCurrentDocument() {
   if (!currentPath || pageEl.hidden) return;
-  contentEl.innerHTML = lastHtml;
-  renderMermaid(contentEl);
   if (editingEnabled()) armEditing();
-  else disarmEditing();
+  else {
+    flushEdits();
+    disarmEditing();
+  }
 }
 
 // The whole rendered page is one continuous editing surface, so the caret
@@ -166,8 +169,10 @@ function armEditing() {
 }
 
 function disarmEditing() {
-  clearTimeout(autosaveTimer);
-  autosaveTimer = 0;
+  clearTimeout(syncTimer);
+  syncTimer = 0;
+  clearTimeout(reconcileTimer);
+  reconcileTimer = 0;
   contentEl.removeAttribute("contenteditable");
   for (const el of contentEl.querySelectorAll("[contenteditable]")) {
     el.removeAttribute("contenteditable");
@@ -202,7 +207,7 @@ async function openPath(path, options = {}) {
   if (editingArmed && isDirty && path !== currentPath) {
     // Never drop keystrokes on navigation: flush first, and stay put if the
     // flush fails so nothing is silently lost.
-    const saved = await saveNow();
+    const saved = await syncNow();
     if (!saved) return;
   }
   try {
@@ -365,8 +370,14 @@ function serializeInlineChildren(el) {
   return out;
 }
 
-function serializeInlineNode(node) {
-  if (node.nodeType === Node.TEXT_NODE) return node.nodeValue;
+// A <br> at the very end of a block is the browser's caret placeholder, not
+// a line break the user typed: serializing it as a hard-break marker would
+// write a literal backslash into the file on the next save.
+function stripTrailingBreak(text) {
+  return text.replace(/(\\\n?)+$/, "");
+}
+
+function serializeInlineNode(node) {  if (node.nodeType === Node.TEXT_NODE) return node.nodeValue;
   if (node.nodeType !== Node.ELEMENT_NODE) return "";
   const tag = node.tagName;
   if (tag === "BR") return "\\\n";
@@ -378,7 +389,7 @@ function serializeInlineNode(node) {
     return inner.includes("`") ? "`` " + inner + " ``" : "`" + inner + "`";
   }
   if (tag === "A") {
-    const text = serializeInlineChildren(node).trim();
+    const text = stripTrailingBreak(serializeInlineChildren(node)).trim();
     const url = reverseLink(node.getAttribute("href") || "");
     return url ? `[${text}](${url})` : text;
   }
@@ -449,12 +460,13 @@ function serializeList(list, pad) {
       }
     }
     flushHead();
-    const first = (segments.shift() || "").trim();
+    const first = stripTrailingBreak(segments.shift() || "").trim();
     lines.push(pad + marker + first);
     const continuationPad = pad + " ".repeat(marker.length);
     for (const segment of segments) {
-      if (!String(segment).trim()) continue;
-      for (const line of String(segment).split("\n")) {
+      const clean = stripTrailingBreak(String(segment));
+      if (!clean.trim()) continue;
+      for (const line of clean.split("\n")) {
         lines.push(line ? continuationPad + line : continuationPad.trimEnd());
       }
     }
@@ -470,7 +482,9 @@ function serializeTable(table) {
   const cellsOf = (row) =>
     [...row.children]
       .filter((cell) => cell.tagName === "TH" || cell.tagName === "TD")
-      .map((cell) => serializeInlineChildren(cell).trim().replace(/\|/g, "\\|").replace(/\n+/g, " "));
+      .map((cell) =>
+        stripTrailingBreak(serializeInlineChildren(cell)).trim().replace(/\|/g, "\\|").replace(/\n+/g, " "),
+      );
   const head = cellsOf(rows[0]);
   if (!head.length) return "";
   const lines = [`| ${head.join(" | ")} |`, `| ${head.map(() => "---").join(" | ")} |`];
@@ -485,7 +499,7 @@ function serializeTable(table) {
 function serializeBlock(el) {
   const tag = el.tagName;
   if (/^H[1-6]$/.test(tag)) {
-    const text = serializeInlineChildren(el).trim();
+    const text = stripTrailingBreak(serializeInlineChildren(el)).trim();
     const actual = el.getAttribute("id") || "";
     const expected = nextHeadingId(text);
     // An explicit `{#id}` survives only when it differs from what the
@@ -499,7 +513,7 @@ function serializeBlock(el) {
     const parts = [];
     for (const child of [...el.children]) {
       if (child.tagName === "SUP") continue;
-      const text = serializeBlock(child);
+      const text = stripTrailingBreak(serializeBlock(child));
       if (text.trim()) parts.push(text);
     }
     if (!parts.length) return `[^${el.id}]:`;
@@ -510,7 +524,7 @@ function serializeBlock(el) {
   }
   if (tag === "P" || tag === "DIV") {
     if (!el.textContent && !el.querySelector("img, input")) return "";
-    return serializeInlineChildren(el).replace(/\\\n?$/, "").trim();
+    return stripTrailingBreak(serializeInlineChildren(el)).trim();
   }
   if (tag === "UL" || tag === "OL") return serializeList(el, "");
   if (tag === "BLOCKQUOTE") {
@@ -716,7 +730,26 @@ function convertParagraphToHeading(p, level) {
   const h = newBlock(`h${level}`);
   h.append(...p.childNodes);
   p.replaceWith(h);
+  // New headings get a real id immediately (tracked while unrendered) so
+  // anchor links work without waiting for a re-render.
+  h.dataset.mkAutoId = "1";
+  updateAutoHeadingId(h);
   setCaretToStart(h);
+}
+
+// Id assignment mirroring the engine's first-come slug scheme, scoped to the
+// live DOM. Runs only for headings the editor created, on conversion and on
+// keystrokes inside them — never on idle, never on a timer.
+function updateAutoHeadingId(h) {
+  const seen = new Set();
+  for (const other of contentEl.querySelectorAll("h1, h2, h3, h4, h5, h6")) {
+    if (other !== h && other.id) seen.add(other.id);
+  }
+  const base = slugifyHeading(h.textContent.trim()) || "section";
+  let id = base;
+  let n = 2;
+  while (seen.has(id)) id = `${base}-${n++}`;
+  h.id = id;
 }
 
 function wrapParagraphInList(p, kind, task, checked) {
@@ -884,6 +917,10 @@ function onEnterKey(event, block) {
     } else if (line && line.tagName === "LI" && line.classList.contains("task") && !line.textContent.trim()) {
       const box = line.querySelector(":scope > input[type='checkbox']");
       if (box) box.checked = false;
+    } else if (line && /^H[1-6]$/.test(line.tagName) && line.textContent.trim()) {
+      // A split clones the id; refresh it (and track it) like a fresh heading.
+      line.dataset.mkAutoId = "1";
+      updateAutoHeadingId(line);
     }
     markDirty();
   });
@@ -1103,32 +1140,154 @@ function nextBlockFor(current) {
 // one-shot timer; the timer fires once after a second of quiet and is gone.
 // Conflict freezes autosave until ⌘S forces or Esc reloads.
 
+// --- Inline editing: fast sync + idle reconcile ------------------------------
+// Two separate rhythms, both one-shot timers that exist only transiently:
+//
+// - sync: ~150ms after the last keystroke the DOM serializes to the .md via
+//   a write-only command. The page itself is never touched, so there is no
+//   caret jump, no flicker, no "pause then mutate".
+// - reconcile: only when the body holds structures whose rendering needs
+//   the engine (footnotes, fresh diagrams/tables, explicit {#ids}), a full
+//   re-render follows after 5s of true idle, with caret and scroll kept.
+
 function markDirty() {
   if (!editingArmed) return;
   isDirty = true;
   editSeq += 1;
-  scheduleAutosave();
+  clearTimeout(reconcileTimer);
+  reconcileTimer = 0;
+  scheduleSync();
 }
 
-function scheduleAutosave() {
+function scheduleSync() {
   if (!editingArmed || conflictPending) return;
-  clearTimeout(autosaveTimer);
-  autosaveTimer = setTimeout(() => {
-    autosaveTimer = 0;
-    autoSaveNow().catch((error) => showToast(String(error)));
-  }, AUTOSAVE_MS);
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    syncTimer = 0;
+    syncNow().catch((error) => showToast(String(error)));
+  }, SYNC_MS);
 }
 
-async function autoSaveNow() {
-  if (!editingArmed || !isDirty || saveInFlight || !currentPath || conflictPending || isComposing) return;
-  await saveNow();
+async function syncNow(options = {}) {
+  const { force = false } = options;
+  if (!editingArmed || !isDirty || saveInFlight || !currentPath || isComposing) return false;
+  if (conflictPending && !force) return false;
+  saveInFlight = true;
+  const seq = editSeq;
+  const body = serializeBody();
+  try {
+    lastMtime = await api().core.invoke("write_document", {
+      path: currentPath,
+      body,
+      expected_mtime_ms: lastMtime,
+      force,
+    });
+    justSavedAt = Date.now();
+    // Keystrokes that landed mid-write belong to the next flush, not this one.
+    if (editSeq === seq) isDirty = false;
+    else scheduleSync();
+    maybeScheduleReconcile(body);
+    return true;
+  } catch (error) {
+    if (String(error).startsWith("CONFLICT")) {
+      conflictPending = true;
+      clearTimeout(syncTimer);
+      syncTimer = 0;
+      showToast("File changed on disk — ⌘S to overwrite, Esc to load it", { ms: 6000 });
+      return false;
+    }
+    showToast(String(error));
+    return false;
+  } finally {
+    saveInFlight = false;
+  }
 }
 
 function flushEdits() {
   if (!editingArmed || !isDirty || saveInFlight || conflictPending || isComposing) return;
-  clearTimeout(autosaveTimer);
-  autosaveTimer = 0;
-  saveNow().catch((error) => showToast(String(error)));
+  clearTimeout(syncTimer);
+  syncTimer = 0;
+  syncNow().catch((error) => showToast(String(error)));
+}
+
+// Hint scan for body shapes whose rendering needs the engine. Plain prose
+// never matches, so ordinary typing never pays for a re-render.
+function docNeedsReconcile(body) {
+  return /\[\^[^\]\s]+\]|```mermaid|^\s*\|.*\|\s*$|\{#[A-Za-z0-9_-]+\}/m.test(body);
+}
+
+function maybeScheduleReconcile(body) {
+  if (!editingArmed || conflictPending || reconcileTimer) return;
+  if (!docNeedsReconcile(body)) return;
+  reconcileTimer = setTimeout(() => {
+    reconcileTimer = 0;
+    reconcileNow().catch((error) => showToast(String(error)));
+  }, RECONCILE_MS);
+}
+
+// Full write + re-render for engine-derived structures, after true idle.
+// Caret, focus, scroll, and already-drawn diagrams survive it.
+async function reconcileNow() {
+  if (!editingArmed || !currentPath || conflictPending) return false;
+  if (saveInFlight || isComposing) {
+    clearTimeout(reconcileTimer);
+    reconcileTimer = setTimeout(() => {
+      reconcileTimer = 0;
+      reconcileNow().catch((error) => showToast(String(error)));
+    }, RECONCILE_MS);
+    return false;
+  }
+  const body = serializeBody();
+  if (!docNeedsReconcile(body)) return true;
+  saveInFlight = true;
+  const seq = editSeq;
+  const caret = captureCaret();
+  const hadFocus = contentEl.contains(document.activeElement);
+  const scroll = document.getElementById("app").scrollTop;
+  // Keep already-rendered diagrams across the re-render so they never
+  // flicker; only new or changed fences re-render below.
+  const diagrams = new Map();
+  for (const holder of contentEl.querySelectorAll(".mk-diagram")) {
+    const source = holder.dataset.mermaid || "";
+    if (!diagrams.has(source)) diagrams.set(source, []);
+    diagrams.get(source).push(holder);
+  }
+  try {
+    const result = await api().core.invoke("save_document", {
+      path: currentPath,
+      body,
+      expected_mtime_ms: lastMtime,
+      force: false,
+    });
+    currentPath = result.doc.path;
+    lastMtime = result.mtime_ms;
+    justSavedAt = Date.now();
+    if (editSeq === seq) isDirty = false;
+    else scheduleSync();
+    renderDocument(result.doc, { keepScroll: scroll, deferMermaid: true });
+    let freshDiagrams = false;
+    for (const pre of contentEl.querySelectorAll("pre")) {
+      const code = pre.querySelector(":scope > code");
+      if (!code || !/\blanguage-mermaid\b/.test(code.className || "")) continue;
+      const stash = diagrams.get(code.textContent || "");
+      if (stash && stash.length) pre.replaceWith(stash.shift());
+      else freshDiagrams = true;
+    }
+    if (freshDiagrams) renderMermaid(contentEl);
+    restoreCaret(caret);
+    if (hadFocus) contentEl.focus({ preventScroll: true });
+    return true;
+  } catch (error) {
+    if (String(error).startsWith("CONFLICT")) {
+      conflictPending = true;
+      showToast("File changed on disk — ⌘S to overwrite, Esc to load it", { ms: 6000 });
+      return false;
+    }
+    showToast(String(error));
+    return false;
+  } finally {
+    saveInFlight = false;
+  }
 }
 
 // --- Inline editing: live conversion --------------------------------------
@@ -1140,6 +1299,9 @@ function onEditInput(event) {
   if (!editingArmed) return;
   markDirty();
   if (event.isComposing) return;
+  const sel = window.getSelection();
+  const line = sel.rangeCount ? editableLineOf(sel.anchorNode) : null;
+  if (line && /^H[1-6]$/.test(line.tagName) && line.dataset.mkAutoId) updateAutoHeadingId(line);
   if (event.inputType === "insertText" && typeof event.data === "string" && /[\s.,;:!?)]/.test(event.data)) {
     tryConvertInline();
   }
@@ -1192,13 +1354,24 @@ function tryConvertInline() {
   }
   const link = before.match(/\[([^\]]+)\]\(([^)\s]+)\)$/);
   if (link) {
-    const start = coreEnd - link[0].length;
+    const bracketAt = coreEnd - link[0].length;
+    // A `!` immediately before the bracket makes this an image, not a link:
+    // without this check a typed image would save back as a link.
+    const isImage = full[bracketAt - 1] === "!";
+    const start = isImage ? bracketAt - 1 : bracketAt;
     node.nodeValue = full.slice(0, start) + full.slice(coreEnd);
-    const anchor = document.createElement("a");
-    anchor.setAttribute("href", link[2]);
-    anchor.textContent = link[1];
+    let el;
+    if (isImage) {
+      el = document.createElement("img");
+      el.setAttribute("alt", link[1]);
+      el.setAttribute("src", link[2]);
+    } else {
+      el = document.createElement("a");
+      el.setAttribute("href", link[2]);
+      el.textContent = link[1];
+    }
     const remainder = document.createTextNode(after);
-    splitTextAt(node, start).before(anchor, remainder);
+    splitTextAt(node, start).before(el, remainder);
     const caret = document.createRange();
     caret.setStart(remainder, 0);
     caret.collapse(true);
@@ -1218,64 +1391,6 @@ function splitTextAt(node, offset) {
     return empty;
   }
   return node.splitText(offset);
-}
-
-async function saveNow(options = {}) {
-  const { force = false } = options;
-  if (!editingArmed || !currentPath || saveInFlight) return false;
-  saveInFlight = true;
-  const seq = editSeq;
-  const caret = captureCaret();
-  const hadFocus = contentEl.contains(document.activeElement);
-  const scroll = document.getElementById("app").scrollTop;
-  // Keep already-rendered diagrams across the re-render so autosave never
-  // makes them flicker; only new or changed fences re-render below.
-  const diagrams = new Map();
-  for (const holder of contentEl.querySelectorAll(".mk-diagram")) {
-    const source = holder.dataset.mermaid || "";
-    if (!diagrams.has(source)) diagrams.set(source, []);
-    diagrams.get(source).push(holder);
-  }
-  try {
-    const result = await api().core.invoke("save_document", {
-      path: currentPath,
-      body: serializeBody(),
-      expected_mtime_ms: lastMtime,
-      force,
-    });
-    currentPath = result.doc.path;
-    lastMtime = result.mtime_ms;
-    justSavedAt = Date.now();
-    // Keystrokes that landed mid-save belong to the next flush, not this one.
-    if (editSeq === seq) isDirty = false;
-    else scheduleAutosave();
-    conflictPending = false;
-    renderDocument(result.doc, { keepScroll: scroll, deferMermaid: true });
-    let freshDiagrams = false;
-    for (const pre of contentEl.querySelectorAll("pre")) {
-      const code = pre.querySelector(":scope > code");
-      if (!code || !/\blanguage-mermaid\b/.test(code.className || "")) continue;
-      const stash = diagrams.get(code.textContent || "");
-      if (stash && stash.length) pre.replaceWith(stash.shift());
-      else freshDiagrams = true;
-    }
-    if (freshDiagrams) renderMermaid(contentEl);
-    restoreCaret(caret);
-    if (hadFocus) contentEl.focus({ preventScroll: true });
-    return true;
-  } catch (error) {
-    if (String(error).startsWith("CONFLICT")) {
-      conflictPending = true;
-      clearTimeout(autosaveTimer);
-      autosaveTimer = 0;
-      showToast("File changed on disk — ⌘S to overwrite, Esc to load it", { ms: 6000 });
-      return false;
-    }
-    showToast(String(error));
-    return false;
-  } finally {
-    saveInFlight = false;
-  }
 }
 
 function onContentKeydown(event) {
@@ -1339,8 +1454,10 @@ function onDiagramDblClick(event) {
 async function cancelEditing() {
   if (!editingArmed) return;
   if (document.activeElement) document.activeElement.blur();
-  clearTimeout(autosaveTimer);
-  autosaveTimer = 0;
+  clearTimeout(syncTimer);
+  syncTimer = 0;
+  clearTimeout(reconcileTimer);
+  reconcileTimer = 0;
   isDirty = false;
   conflictPending = false;
   try {
@@ -1513,7 +1630,7 @@ async function boot() {
   });
   contentEl.addEventListener("compositionend", () => {
     isComposing = false;
-    if (editingArmed && isDirty) scheduleAutosave();
+    if (editingArmed && isDirty) scheduleSync();
   });
   // Autosave flushes on the way out too, so a quick close never loses the
   // last second of typing. Both are plain events; nothing polls.
@@ -1533,7 +1650,7 @@ async function boot() {
       if (editingArmed && settingsEl.hidden) {
         event.preventDefault();
         // A pending conflict makes this the explicit overwrite.
-        saveNow({ force: conflictPending }).catch((error) => showToast(String(error)));
+        syncNow({ force: conflictPending }).catch((error) => showToast(String(error)));
       }
       return;
     }
@@ -1583,10 +1700,12 @@ async function boot() {
     if (path && path === currentPath) {
       if (Date.now() - justSavedAt < 1200) return; // echo of our own save
       if (editingArmed && isDirty) {
-        // Freeze autosave until the user decides: ⌘S overwrites, Esc loads.
+        // Freeze syncing until the user decides: ⌘S overwrites, Esc loads.
         conflictPending = true;
-        clearTimeout(autosaveTimer);
-        autosaveTimer = 0;
+        clearTimeout(syncTimer);
+        syncTimer = 0;
+        clearTimeout(reconcileTimer);
+        reconcileTimer = 0;
         showToast("File changed on disk — ⌘S to overwrite, Esc to load it", { ms: 6000 });
         return;
       }

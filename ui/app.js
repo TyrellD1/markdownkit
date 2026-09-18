@@ -748,15 +748,25 @@ function newBlock(tag) {
   return document.createElement(tag);
 }
 
-function convertParagraphToHeading(p, level) {
-  const h = newBlock(`h${level}`);
-  h.append(...p.childNodes);
-  p.replaceWith(h);
-  // New headings get a real id immediately (tracked while unrendered) so
-  // anchor links work without waiting for a re-render.
-  h.dataset.mkAutoId = "1";
-  updateAutoHeadingId(h);
-  setCaretToStart(h);
+function wrapLineInList(line, kind, task, checked, rest, offset) {
+  const list = document.createElement(kind);
+  const li = newBlock("li");
+  if (task) {
+    li.className = "task";
+    li.append(makeTaskCheckbox(checked), document.createTextNode(" "));
+  }
+  if (rest) li.append(document.createTextNode(rest));
+  list.append(li);
+  line.replaceWith(list);
+  markDirty();
+  setCaretAtTextOffset(li, offset);
+}
+
+function makeTaskCheckbox(checked) {
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = !!checked;
+  return box;
 }
 
 // Id assignment mirroring the engine's first-come slug scheme, scoped to the
@@ -774,57 +784,27 @@ function updateAutoHeadingId(h) {
   h.id = id;
 }
 
-function wrapParagraphInList(p, kind, task, checked) {
-  const list = document.createElement(kind);
-  const li = newBlock("li");
-  if (task) {
-    li.className = "task";
-    li.append(makeTaskCheckbox(checked), document.createTextNode(" "));
+// Swap a list item out of its list for a standalone block, splitting the
+// list around it when items follow. Shared by list exits.
+function replaceListItemWithBlock(li, block) {
+  const list = li.parentElement;
+  if (!list || (list.tagName !== "UL" && list.tagName !== "OL")) return false;
+  const tail = [];
+  let next = li.nextElementSibling;
+  while (next) {
+    const following = next.nextElementSibling;
+    tail.push(next);
+    next = following;
   }
-  li.append(...p.childNodes);
-  list.append(li);
-  p.replaceWith(list);
-  setCaretToStart(li);
-}
-
-function wrapParagraphInBlockquote(p) {
-  const quote = document.createElement("blockquote");
-  const inner = newBlock("p");
-  inner.append(...p.childNodes);
-  quote.append(inner);
-  p.replaceWith(quote);
-  setCaretToStart(inner);
-}
-
-function makeTaskCheckbox(checked) {
-  const box = document.createElement("input");
-  box.type = "checkbox";
-  box.checked = !!checked;
-  return box;
-}
-
-function onSpacePrefix(event, block) {
-  if ((!isParagraphLike(block) && !/^H[1-6]$/.test(block.tagName)) || block.closest("li")) return;
-  const offset = caretOffsetIn(block);
-  if (offset == null) return;
-  const before = block.textContent.slice(0, offset);
-  const rest = block.textContent.slice(offset);
-  const convert = (fn) => {
-    event.preventDefault();
-    block.textContent = rest;
-    markDirty();
-    fn();
-  };
-  const heading = before.match(/^(#{1,6})$/);
-  if (heading) convert(() => convertParagraphToHeading(block, heading[1].length));
-  else if (!isParagraphLike(block)) return;
-  else if (/^(-|\*|\+)$/.test(before)) convert(() => wrapParagraphInList(block, "UL", false));
-  else if (/^1\.$/.test(before)) convert(() => wrapParagraphInList(block, "OL", false));
-  else if (/^(\[\]|\[x\])$/i.test(before)) {
-    convert(() => wrapParagraphInList(block, "UL", true, /x/i.test(before)));
-  } else if (/^>$/.test(before) && !block.closest("blockquote")) {
-    convert(() => wrapParagraphInBlockquote(block));
+  li.remove();
+  list.after(block);
+  if (tail.length) {
+    const rest = document.createElement(list.tagName);
+    rest.append(...tail);
+    block.after(rest);
   }
+  if (!list.children.length) list.remove();
+  return true;
 }
 
 function outdentListItem(li) {
@@ -863,25 +843,9 @@ function indentListItem(li) {
 }
 
 function exitListToParagraph(li) {
-  const list = li.parentElement;
-  if (!list || (list.tagName !== "UL" && list.tagName !== "OL")) return false;
-  const tail = [];
-  let next = li.nextElementSibling;
-  while (next) {
-    const following = next.nextElementSibling;
-    tail.push(next);
-    next = following;
-  }
-  li.remove();
   const p = newBlock("p");
   p.append(document.createElement("br"));
-  list.after(p);
-  if (tail.length) {
-    const rest = document.createElement(list.tagName);
-    rest.append(...tail);
-    p.after(rest);
-  }
-  if (!list.children.length) list.remove();
+  if (!replaceListItemWithBlock(li, p)) return false;
   setCaretToStart(p);
   return true;
 }
@@ -1323,54 +1287,125 @@ function onEditInput(event) {
   if (!editingArmed) return;
   markDirty();
   if (event.isComposing) return;
+  if (/^history/.test(event.inputType || "")) return;
   const sel = window.getSelection();
   const line = sel.rangeCount ? editableLineOf(sel.anchorNode) : null;
   if (line && /^H[1-6]$/.test(line.tagName) && line.dataset.mkAutoId) updateAutoHeadingId(line);
-  if (event.inputType !== "insertText" || typeof event.data !== "string") return;
-  // Belt and suspenders with the keydown prefix check: if the keydown ever
-  // misses (IME commit, mobile keyboard, unhandled path), the freshly typed
-  // space still converts the line a frame later. When keydown already
-  // converted, the markers are gone and this is a no-op.
-  if (event.data === " " && tryConvertBlockPrefixFromInput()) return;
-  if (/[\s.,;:!?)]/.test(event.data)) tryConvertInline();
+  // Block prefixes convert here, on input, exactly like inline marks below:
+  // matching at the line start regardless of how the characters arrived
+  // (keydown, IME commit, mobile keyboard). Pasted and undone text is left
+  // literal.
+  if (
+    (event.inputType === undefined ||
+      event.inputType === "insertText" ||
+      event.inputType === "deleteContentBackward" ||
+      event.inputType === "deleteContentForward") &&
+    tryConvertBlockPrefixLive()
+  ) {
+    return;
+  }
+  if (event.inputType === "insertText" && typeof event.data === "string" && /[\s.,;:!?)]/.test(event.data)) {
+    tryConvertInline();
+  }
 }
 
-// Same conversions as onSpacePrefix, but for a space that already landed in
-// the DOM. Matches only when the text before the caret is exactly the prefix
-// plus that space, so mid-line spaces never trigger.
-function tryConvertBlockPrefixFromInput() {
+// Convert a bare `## `/`- `/`1. `/`[] `/`> ` at the line start the moment it
+// exists, consuming the delimiter. Only the exact bare-prefix state matches,
+// so mid-line spaces and literal prose never trigger. Runs on input (not
+// keydown), so there is no preventDefault to eat keystrokes on a miss.
+function tryConvertBlockPrefixLive() {
   const sel = window.getSelection();
   if (!sel.rangeCount || !sel.isCollapsed) return false;
   const node = sel.anchorNode;
   if (!node) return false;
   const line = editableLineOf(node);
   if (!line || !contentEl.contains(line)) return false;
-  if (line.closest("li")) return false;
   const text = line.textContent;
   const offset = caretOffsetIn(line);
   if (offset == null) return false;
-  const before = text.slice(0, offset);
-  const rest = text.slice(offset);
-  const convert = (fn) => {
-    line.textContent = rest;
-    markDirty();
-    fn();
-  };
+  const toOffset = (consumed) => Math.max(0, offset - consumed);
   let match;
-  if ((match = before.match(/^(#{1,6}) $/))) {
-    if (!isParagraphLike(line) && !/^H[1-6]$/.test(line.tagName)) return false;
-    convert(() => convertParagraphToHeading(line, match[1].length));
+  if ((match = text.match(/^(#{1,6})[ \u00a0]/))) {
+    const level = match[1].length;
+    const rest = text.slice(match[0].length);
+    if (line.tagName === "LI") {
+      // An empty list item becomes a heading and leaves the list; a
+      // non-empty item keeps its literal text.
+      if (rest.trim() !== "" || line.querySelector("ul, ol, input")) return false;
+      const h = newBlock(`h${level}`);
+      h.dataset.mkAutoId = "1";
+      replaceListItemWithBlock(line, h);
+      updateAutoHeadingId(h);
+      setCaretAtTextOffset(h, toOffset(match[0].length));
+      markDirty();
+      return true;
+    }
+    // Nested lines (e.g. a div inside a list item) keep literal markers,
+    // same as paragraphs inside list items.
+    if (line.closest("li") || (!isParagraphLike(line) && !/^H[1-6]$/.test(line.tagName))) {
+      return false;
+    }
+    const h = newBlock(`h${level}`);
+    h.textContent = rest;
+    h.dataset.mkAutoId = "1";
+    line.replaceWith(h);
+    updateAutoHeadingId(h);
+    setCaretAtTextOffset(h, toOffset(match[0].length));
+    markDirty();
     return true;
   }
-  if (!isParagraphLike(line)) return false;
-  if (/^(-|\*|\+) $/.test(before)) convert(() => wrapParagraphInList(line, "UL", false));
-  else if (/^1\. $/.test(before)) convert(() => wrapParagraphInList(line, "OL", false));
-  else if (/^(\[\]|\[x\]) $/i.test(before)) {
-    convert(() => wrapParagraphInList(line, "UL", true, /x\] $/i.test(before)));
-  } else if (/^> $/.test(before) && !line.closest("blockquote")) {
-    convert(() => wrapParagraphInBlockquote(line));
-  } else return false;
-  return true;
+  if (line.closest("li") || !isParagraphLike(line)) return false;
+  const restOf = (m) => text.slice(m[0].length);
+  const caretAfter = (m) => toOffset(m[0].length);
+  if ((match = text.match(/^(-|\*|\+)[ \u00a0]/))) {
+    wrapLineInList(line, "UL", false, false, restOf(match), caretAfter(match));
+    return true;
+  }
+  if ((match = text.match(/^1\.[ \u00a0]/))) {
+    wrapLineInList(line, "OL", false, false, restOf(match), caretAfter(match));
+    return true;
+  }
+  if ((match = text.match(/^(\[\]|\[x\])[ \u00a0]/i))) {
+    wrapLineInList(line, "UL", true, /x/i.test(match[1]), restOf(match), caretAfter(match));
+    return true;
+  }
+  if ((match = text.match(/^>[ \u00a0]/)) && !line.closest("blockquote")) {
+    const quote = document.createElement("blockquote");
+    const inner = newBlock("p");
+    inner.textContent = restOf(match);
+    quote.append(inner);
+    line.replaceWith(quote);
+    setCaretAtTextOffset(inner, caretAfter(match));
+    markDirty();
+    return true;
+  }
+  return false;
+}
+
+function setCaretAtTextOffset(block, offset) {
+  const range = document.createRange();
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  let remaining = Math.max(0, offset);
+  let placed = false;
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeValue.length >= remaining) {
+      range.setStart(node, remaining);
+      placed = true;
+      break;
+    }
+    remaining -= node.nodeValue.length;
+  }
+  if (!placed) {
+    range.selectNodeContents(block);
+    range.collapse(false);
+  } else {
+    range.collapse(true);
+  }
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  (block.closest("[contenteditable]") || block).focus({ preventScroll: true });
 }
 
 function tryConvertInline() {
@@ -1468,10 +1503,9 @@ function onContentKeydown(event) {
     return;
   }
   if (event.altKey) return;
+  // Block prefixes convert on input (see tryConvertBlockPrefixLive), shared
+  // with inline marks: one trigger, no preventDefault to eat keystrokes.
   switch (event.key) {
-    case " ":
-      onSpacePrefix(event, block);
-      break;
     case "Enter":
       onEnterKey(event, block);
       break;

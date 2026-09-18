@@ -21,12 +21,21 @@ const allowEditingEl = document.getElementById("allow-editing");
 let currentPath = null;
 let lastFrontmatter = [];
 let lastHtml = "";
+let lastMtime = null;
 let toastTimer = 0;
 let toastUrl = null;
 let editingArmed = false;
 let saveInFlight = false;
 let justSavedAt = 0;
 let isDirty = false;
+let editSeq = 0;
+let isComposing = false;
+let conflictPending = false;
+let autosaveTimer = 0;
+// Autosave waits for a full second of quiet after the last keystroke, then
+// fires once. There is no interval and no work while idle: the timer only
+// ever exists transiently between typing and saving.
+const AUTOSAVE_MS = 1000;
 const historyStack = [];
 let historyIndex = -1;
 
@@ -133,40 +142,33 @@ function applyEditingToCurrentDocument() {
   else disarmEditing();
 }
 
-// Blocks the rich-text editor owns: prose shapes whose DOM serializes back
-// to markdown exactly. Code, tables, diagrams, and footnotes stay read-only;
-// they re-render unchanged on save.
-function isEditableCandidate(el) {
-  if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
-  if (!/^(P|H[1-6]|LI)$/.test(el.tagName)) return false;
-  if (el.closest("pre, table, .mk-diagram, .footnotes")) return false;
-  const top = el.parentElement;
-  if (top && top.parentElement === contentEl && top.tagName === "DIV" && !top.className) {
-    return false; // footnote definition container
-  }
-  return true;
-}
-
+// The whole rendered page is one continuous editing surface, so the caret
+// moves between blocks exactly like a reader's eyes do: arrows, clicks, and
+// selections cross block boundaries natively. Nothing but the root carries
+// an editing host, which is what keeps movement effortless. Read-only
+// islands (diagrams) opt back out individually below.
 function armEditing() {
   if (!currentPath || pageEl.hidden) return;
   disarmEditing();
-  for (const el of contentEl.querySelectorAll("p, h1, h2, h3, h4, h5, h6, li")) {
-    if (isEditableCandidate(el)) el.setAttribute("contenteditable", "plaintext-only");
+  contentEl.setAttribute("contenteditable", "plaintext-only");
+  for (const holder of contentEl.querySelectorAll(".mk-diagram")) {
+    holder.setAttribute("contenteditable", "false");
   }
   for (const box of contentEl.querySelectorAll("li.task > input[type='checkbox']")) {
     box.disabled = false;
   }
   if (!contentEl.firstElementChild) {
     const p = document.createElement("p");
-    p.setAttribute("contenteditable", "plaintext-only");
     p.append(document.createElement("br"));
     contentEl.append(p);
   }
   editingArmed = true;
-  pageEl.classList.add("is-editing");
 }
 
 function disarmEditing() {
+  clearTimeout(autosaveTimer);
+  autosaveTimer = 0;
+  contentEl.removeAttribute("contenteditable");
   for (const el of contentEl.querySelectorAll("[contenteditable]")) {
     el.removeAttribute("contenteditable");
   }
@@ -174,7 +176,6 @@ function disarmEditing() {
     box.disabled = true;
   }
   editingArmed = false;
-  pageEl.classList.remove("is-editing");
 }
 
 function updateNav() {
@@ -199,17 +200,21 @@ async function openPath(path, options = {}) {
   if (!path) return;
   const { fromHistory = false, hash = "", skipHistory = false } = options;
   if (editingArmed && isDirty && path !== currentPath) {
-    showToast("Unsaved edits discarded");
+    // Never drop keystrokes on navigation: flush first, and stay put if the
+    // flush fails so nothing is silently lost.
+    const saved = await saveNow();
+    if (!saved) return;
   }
   try {
-    const doc = await api().core.invoke("open_document", { path });
-    currentPath = doc.path;
-    renderDocument(doc);
+    const result = await api().core.invoke("open_document", { path });
+    currentPath = result.doc.path;
+    lastMtime = result.mtime_ms;
+    renderDocument(result.doc);
     if (hash) {
       requestAnimationFrame(() => scrollToHash(hash));
     }
     if (!fromHistory && !skipHistory) {
-      pushHistory(doc.path, hash);
+      pushHistory(result.doc.path, hash);
     } else {
       updateNav();
     }
@@ -250,7 +255,7 @@ function renderDocument(doc, options = {}) {
   const app = document.getElementById("app");
   if (options.keepScroll == null) app.scrollTo(0, 0);
   else app.scrollTop = options.keepScroll;
-  renderMermaid(contentEl);
+  if (!options.deferMermaid) renderMermaid(contentEl);
   if (editingEnabled()) armEditing();
 }
 
@@ -345,7 +350,18 @@ function reverseImage(src) {
 
 function serializeInlineChildren(el) {
   let out = "";
-  for (const child of [...el.childNodes]) out += serializeInlineNode(child);
+  let afterBreak = false;
+  for (const child of [...el.childNodes]) {
+    let part = serializeInlineNode(child);
+    // The renderer pretty-prints a newline right after every <br>; without
+    // stripping it, a hard break would round-trip as backslash + blank line
+    // and split the paragraph on save.
+    if (afterBreak && child.nodeType === Node.TEXT_NODE) {
+      part = part.replace(/^[ \t]*\n/, "");
+    }
+    afterBreak = child.nodeType === Node.ELEMENT_NODE && child.tagName === "BR";
+    out += part;
+  }
   return out;
 }
 
@@ -388,7 +404,7 @@ function serializeInlineNode(node) {
   return serializeInlineChildren(node);
 }
 
-function serializeList(list, depth) {
+function serializeList(list, pad) {
   const ordered = list.tagName === "OL";
   const lines = [];
   let number = 0;
@@ -402,20 +418,27 @@ function serializeList(list, depth) {
       : ordered
         ? `${number}. `
         : "- ";
-    const pad = "  ".repeat(depth);
     const segments = [];
+    const nestedLists = [];
     let head = "";
     const flushHead = () => {
-      if (head) {
+      // Whitespace-only residue (e.g. the formatting newline around a nested
+      // list) is not content; keeping it would emit blank lines that loosen
+      // tight lists on save.
+      if (head.trim()) {
         segments.push(head);
+        head = "";
+      } else {
         head = "";
       }
     };
     for (const child of [...li.childNodes]) {
       if (child.nodeType === Node.ELEMENT_NODE && (child.tagName === "UL" || child.tagName === "OL")) {
         flushHead();
-        const nested = serializeList(child, depth + 1);
-        if (nested) segments.push(nested);
+        // Nested blocks align to this item's content column, which varies
+        // ("- " takes 2, "10. " takes 4): a fixed indent would un-nest them.
+        const nested = serializeList(child, pad + " ".repeat(marker.length));
+        if (nested) nestedLists.push(nested);
       } else if (child.nodeType === Node.ELEMENT_NODE && child.tagName === "P") {
         flushHead();
         segments.push(serializeInlineChildren(child));
@@ -430,10 +453,13 @@ function serializeList(list, depth) {
     lines.push(pad + marker + first);
     const continuationPad = pad + " ".repeat(marker.length);
     for (const segment of segments) {
+      if (!String(segment).trim()) continue;
       for (const line of String(segment).split("\n")) {
         lines.push(line ? continuationPad + line : continuationPad.trimEnd());
       }
     }
+    // Nested lists carry their own depth indent; they are appended raw.
+    for (const nested of nestedLists) lines.push(nested);
   }
   return lines.join("\n");
 }
@@ -458,12 +484,35 @@ function serializeTable(table) {
 
 function serializeBlock(el) {
   const tag = el.tagName;
-  if (/^H[1-6]$/.test(tag)) return `${"#".repeat(Number(tag[1]))} ${serializeInlineChildren(el).trim()}`;
+  if (/^H[1-6]$/.test(tag)) {
+    const text = serializeInlineChildren(el).trim();
+    const actual = el.getAttribute("id") || "";
+    const expected = nextHeadingId(text);
+    // An explicit `{#id}` survives only when it differs from what the
+    // renderer would assign anyway; otherwise the id round-trips implicitly.
+    const suffix = actual && actual !== expected ? ` {#${actual}}` : "";
+    return `${"#".repeat(Number(tag[1]))} ${text}${suffix}`;
+  }
+  // Footnote definitions render as plain classless divs with the label as
+  // id; they must be caught before the generic DIV branch below.
+  if (tag === "DIV" && !el.className && el.id && el.querySelector(":scope > sup")) {
+    const parts = [];
+    for (const child of [...el.children]) {
+      if (child.tagName === "SUP") continue;
+      const text = serializeBlock(child);
+      if (text.trim()) parts.push(text);
+    }
+    if (!parts.length) return `[^${el.id}]:`;
+    const lines = parts.join("\n\n").split("\n");
+    return [`[^${el.id}]: ${lines[0]}`, ...lines.slice(1).map((line) => (line ? `    ${line}` : ""))].join(
+      "\n",
+    );
+  }
   if (tag === "P" || tag === "DIV") {
     if (!el.textContent && !el.querySelector("img, input")) return "";
     return serializeInlineChildren(el).replace(/\\\n?$/, "").trim();
   }
-  if (tag === "UL" || tag === "OL") return serializeList(el, 0);
+  if (tag === "UL" || tag === "OL") return serializeList(el, "");
   if (tag === "BLOCKQUOTE") {
     const inner = [];
     for (const child of [...el.childNodes]) {
@@ -476,13 +525,15 @@ function serializeBlock(el) {
     return inner
       .join("\n>\n")
       .split("\n")
-      .map((line) => (line ? `> ${line}` : ">"))
+      // Bare ">" lines are this level's own separators and stay as-is;
+      // every other line gains one "> ", including nested quote markers.
+      .map((line) => (line === "" || line === ">" ? ">" : `> ${line}`))
       .join("\n");
   }
   if (tag === "PRE") {
     const code = el.querySelector("code");
     const match = (code?.className || "").match(/language-([\w+-]+)/);
-    const text = (code?.textContent ?? el.textContent).replace(/\n$/, "");
+    const text = preTextContent(code || el).replace(/\n$/, "");
     return `\`\`\`${match ? match[1] : ""}\n${text}\n\`\`\``;
   }
   if (el.classList.contains("mk-diagram")) {
@@ -491,16 +542,64 @@ function serializeBlock(el) {
   }
   if (tag === "TABLE") return serializeTable(el);
   if (tag === "HR") return "---";
-  if (tag === "DIV" && !el.className && el.id) {
-    const paragraphs = [...el.querySelectorAll(":scope > p")].map((p) =>
-      serializeInlineChildren(p).trim(),
-    );
-    return `[^${el.id}]: ` + paragraphs.join("\n    ");
-  }
   return serializeInlineChildren(el).trim();
 }
 
+// Text of an edited code block. textContent alone would silently drop line
+// breaks the browser inserted as <br> or split divs while typing.
+function preTextContent(el) {
+  let out = "";
+  for (const child of [...el.childNodes]) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      out += child.nodeValue;
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      if (child.tagName === "BR") out += "\n";
+      else {
+        out += preTextContent(child);
+        if (child.tagName === "DIV" || child.tagName === "P") out += "\n";
+      }
+    }
+  }
+  return out;
+}
+
+let headingIdSeen = new Set();
+
+// Mirrors the engine's slugify so explicit `{#id}` attributes (and only
+// those) survive a save: when the rendered id equals the assigned one, the
+// heading round-trips with no suffix at all.
+function slugifyHeading(text) {
+  let slug = "";
+  let prevDash = false;
+  for (const ch of text) {
+    if (/[a-zA-Z0-9]/.test(ch)) {
+      slug += ch.toLowerCase();
+      prevDash = false;
+    } else if (/\p{Alphabetic}/u.test(ch)) {
+      slug += ch;
+      prevDash = false;
+    } else if (slug && !prevDash) {
+      slug += "-";
+      prevDash = true;
+    }
+  }
+  return slug.replace(/^-+|-+$/g, "");
+}
+
+function nextHeadingId(text) {
+  const base = slugifyHeading(text) || "section";
+  let id = base;
+  let n = 2;
+  while (headingIdSeen.has(id)) {
+    id = `${base}-${n}`;
+    n += 1;
+  }
+  headingIdSeen.add(id);
+  return id;
+}
+
 function serializeBody() {
+  headingIdSeen = new Set();
   const parts = [];
   for (const child of [...contentEl.childNodes]) {
     if (child.nodeType === Node.TEXT_NODE) {
@@ -520,10 +619,14 @@ function serializeBody() {
 
 // --- Inline editing: caret, keymap, save ------------------------------------
 
-function editableBlockOf(node) {
+// The prose line around the caret: the nearest paragraph, heading, or list
+// item. Returns null inside code, tables, and other non-prose shapes, where
+// typing stays plain and no shortcut applies.
+function editableLineOf(node) {
   if (!node) return null;
   const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
-  return el?.closest?.("[contenteditable]") ?? null;
+  const line = el?.closest?.("p, h1, h2, h3, h4, h5, h6, li");
+  return line && contentEl.contains(line) ? line : null;
 }
 
 function topLevelBlock(node) {
@@ -603,14 +706,14 @@ function restoreCaret(caret) {
   sel.addRange(range);
 }
 
-function makeEditable(tag) {
-  const el = document.createElement(tag);
-  el.setAttribute("contenteditable", "plaintext-only");
-  return el;
+// New blocks inherit the root editing host, so they must not carry their
+// own contenteditable attribute: nested hosts would trap the caret.
+function newBlock(tag) {
+  return document.createElement(tag);
 }
 
 function convertParagraphToHeading(p, level) {
-  const h = makeEditable(`h${level}`);
+  const h = newBlock(`h${level}`);
   h.append(...p.childNodes);
   p.replaceWith(h);
   setCaretToStart(h);
@@ -618,7 +721,7 @@ function convertParagraphToHeading(p, level) {
 
 function wrapParagraphInList(p, kind, task, checked) {
   const list = document.createElement(kind);
-  const li = makeEditable("li");
+  const li = newBlock("li");
   if (task) {
     li.className = "task";
     li.append(makeTaskCheckbox(checked), document.createTextNode(" "));
@@ -631,7 +734,7 @@ function wrapParagraphInList(p, kind, task, checked) {
 
 function wrapParagraphInBlockquote(p) {
   const quote = document.createElement("blockquote");
-  const inner = makeEditable("p");
+  const inner = newBlock("p");
   inner.append(...p.childNodes);
   quote.append(inner);
   p.replaceWith(quote);
@@ -646,24 +749,27 @@ function makeTaskCheckbox(checked) {
 }
 
 function onSpacePrefix(event, block) {
-  if (block.tagName !== "P" || block.closest("li")) return;
+  if ((block.tagName !== "P" && !/^H[1-6]$/.test(block.tagName)) || block.closest("li")) return;
   const offset = caretOffsetIn(block);
   if (offset == null) return;
   const before = block.textContent.slice(0, offset);
   const rest = block.textContent.slice(offset);
-  let heading = null;
-  if (/^(#{1,6})$/.test(before)) heading = before.length;
   const convert = (fn) => {
     event.preventDefault();
     block.textContent = rest;
+    markDirty();
     fn();
   };
-  if (heading) convert(() => convertParagraphToHeading(block, heading));
-  else if (/^(-|\*)$/.test(before)) convert(() => wrapParagraphInList(block, "UL", false));
+  const heading = before.match(/^(#{1,6})$/);
+  if (heading) convert(() => convertParagraphToHeading(block, heading[1].length));
+  else if (block.tagName !== "P") return;
+  else if (/^(-|\*|\+)$/.test(before)) convert(() => wrapParagraphInList(block, "UL", false));
   else if (/^1\.$/.test(before)) convert(() => wrapParagraphInList(block, "OL", false));
   else if (/^(\[\]|\[x\])$/i.test(before)) {
     convert(() => wrapParagraphInList(block, "UL", true, /x/i.test(before)));
-  } else if (/^>$/.test(before)) convert(() => wrapParagraphInBlockquote(block));
+  } else if (/^>$/.test(before) && !block.closest("blockquote")) {
+    convert(() => wrapParagraphInBlockquote(block));
+  }
 }
 
 function outdentListItem(li) {
@@ -712,7 +818,7 @@ function exitListToParagraph(li) {
     next = following;
   }
   li.remove();
-  const p = makeEditable("p");
+  const p = newBlock("p");
   p.append(document.createElement("br"));
   list.after(p);
   if (tail.length) {
@@ -730,9 +836,10 @@ function onEnterKey(event, block) {
   if (block.tagName === "P" && !block.closest("li") && block.textContent.trim() === "---") {
     event.preventDefault();
     const hr = document.createElement("hr");
-    const p = makeEditable("p");
+    const p = newBlock("p");
     p.append(document.createElement("br"));
     block.replaceWith(hr, p);
+    markDirty();
     setCaretToStart(p);
     return;
   }
@@ -741,32 +848,66 @@ function onEnterKey(event, block) {
     if (!outdentListItem(block)) exitListToParagraph(block);
     return;
   }
+  // ```lang + Enter opens a real code block; the fence never shows as text.
+  if (block.tagName === "P" && !block.closest("li, blockquote, table, pre")) {
+    const fence = block.textContent.match(/^```([\w+-]*)$/);
+    if (fence && caretAtEnd(event, block)) {
+      event.preventDefault();
+      openCodeBlock(block, fence[1]);
+      return;
+    }
+  }
   // Let the browser split the block, then normalize the Notion-unlike parts:
-  // a heading split stays a heading only when text remains; a trailing split
-  // becomes a paragraph, and stray divs become paragraphs.
+  // a heading split at the very end becomes a paragraph, and stray top-level
+  // divs become paragraphs.
   queueMicrotask(() => {
     const sel = window.getSelection();
     if (!sel.rangeCount) return;
-    const now = editableBlockOf(sel.anchorNode);
-    if (!now || now === block || !contentEl.contains(now)) return;
-    if (!now.hasAttribute("contenteditable")) {
-      now.setAttribute("contenteditable", "plaintext-only");
-    }
-    if (/^H[1-6]$/.test(block.tagName) && /^H[1-6]$/.test(now.tagName) && !now.textContent.trim()) {
-      const p = makeEditable("p");
-      p.append(...now.childNodes);
-      now.replaceWith(p);
+    const line = editableLineOf(sel.anchorNode);
+    const top = line || topLevelBlock(sel.anchorNode);
+    if (!top || top === block || !contentEl.contains(top)) return;
+    if (
+      line &&
+      /^H[1-6]$/.test(block.tagName) &&
+      /^H[1-6]$/.test(line.tagName) &&
+      !line.textContent.trim()
+    ) {
+      const p = newBlock("p");
+      p.append(...line.childNodes);
+      line.replaceWith(p);
       setCaretToStart(p);
-    } else if (now.tagName === "DIV" && now.parentElement === contentEl) {
-      const p = makeEditable("p");
-      p.append(...now.childNodes);
-      now.replaceWith(p);
+    } else if (!line && top.tagName === "DIV" && top.parentElement === contentEl) {
+      const p = newBlock("p");
+      p.append(...top.childNodes);
+      top.replaceWith(p);
       setCaretToStart(p);
-    } else if (now.tagName === "LI" && now.classList.contains("task") && !now.textContent.trim()) {
-      const box = now.querySelector(":scope > input[type='checkbox']");
+    } else if (line && line.tagName === "LI" && line.classList.contains("task") && !line.textContent.trim()) {
+      const box = line.querySelector(":scope > input[type='checkbox']");
       if (box) box.checked = false;
     }
+    markDirty();
   });
+}
+
+function caretAtEnd(event, block) {
+  const offset = caretOffsetIn(block);
+  return offset != null && offset === block.textContent.length;
+}
+
+function openCodeBlock(p, lang) {
+  const pre = document.createElement("pre");
+  const code = document.createElement("code");
+  if (lang) code.className = `language-${lang}`;
+  pre.append(code);
+  p.replaceWith(pre);
+  markDirty();
+  const range = document.createRange();
+  range.selectNodeContents(code);
+  range.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  contentEl.focus({ preventScroll: true });
 }
 
 function onBackspaceKey(event, block) {
@@ -774,9 +915,10 @@ function onBackspaceKey(event, block) {
   if (offset !== 0) return;
   if (/^H[1-6]$/.test(block.tagName) && !block.textContent) {
     event.preventDefault();
-    const p = makeEditable("p");
+    const p = newBlock("p");
     p.append(...block.childNodes);
     block.replaceWith(p);
+    markDirty();
     setCaretToStart(p);
   }
   // Otherwise the browser's native merge (including across list items) is
@@ -789,9 +931,10 @@ function onTabKey(event, block) {
   if (!li || !contentEl.contains(li)) return;
   if (event.shiftKey) {
     if (!outdentListItem(li) && !li.querySelector("ul, ol")) {
-      const p = makeEditable("p");
+      const p = newBlock("p");
       p.append(...[...li.childNodes].filter((node) => node.tagName !== "INPUT"));
       li.replaceWith(p);
+      markDirty();
       setCaretToStart(p);
     }
   } else {
@@ -799,32 +942,37 @@ function onTabKey(event, block) {
   }
 }
 
-function wrapSelection(marker) {
+// Inline shortcuts insert real elements, not markers: the selection becomes
+// bold/italic/code immediately and stays that way through save, because the
+// serializer reads the same elements back.
+function wrapSelectionElement(tag, attributes = {}) {
   const sel = window.getSelection();
   if (!sel.rangeCount || sel.isCollapsed) {
     showToast("Select text first");
-    return;
+    return false;
   }
   const range = sel.getRangeAt(0);
-  const startBlock = editableBlockOf(range.startContainer);
-  const endBlock = editableBlockOf(range.endContainer);
-  if (!startBlock || startBlock !== endBlock) return;
+  const startBlock = editableLineOf(range.startContainer);
+  const endBlock = editableLineOf(range.endContainer);
+  if (!startBlock || startBlock !== endBlock) return false;
   const selected = range.extractContents();
-  const open = document.createTextNode(marker);
-  const close = document.createTextNode(marker);
-  range.insertNode(open);
-  const mid = range.cloneRange();
-  mid.setStartAfter(open);
-  mid.collapse(true);
-  mid.insertNode(selected);
-  const end = range.cloneRange();
-  end.setStartAfter(selected.lastChild || open);
-  end.collapse(true);
-  end.insertNode(close);
-  end.setStartAfter(close);
-  end.collapse(true);
+  const el = document.createElement(tag);
+  for (const [name, value] of Object.entries(attributes)) el.setAttribute(name, value);
+  el.append(selected);
+  range.insertNode(el);
+  const after = document.createRange();
+  after.setStartAfter(el);
+  after.collapse(true);
   sel.removeAllRanges();
-  sel.addRange(end);
+  sel.addRange(after);
+  markDirty();
+  return true;
+}
+
+function wrapSelection(marker) {
+  if (marker === "**") wrapSelectionElement("STRONG");
+  else if (marker === "*") wrapSelectionElement("EM");
+  else if (marker === "`") wrapSelectionElement("CODE");
 }
 
 function wrapSelectionAsLink() {
@@ -834,8 +982,8 @@ function wrapSelectionAsLink() {
     return;
   }
   const range = sel.getRangeAt(0);
-  const startBlock = editableBlockOf(range.startContainer);
-  const endBlock = editableBlockOf(range.endContainer);
+  const startBlock = editableLineOf(range.startContainer);
+  const endBlock = editableLineOf(range.endContainer);
   if (!startBlock || startBlock !== endBlock) return;
   const selected = range.extractContents();
   const openBracket = document.createTextNode("[");
@@ -856,10 +1004,11 @@ function wrapSelectionAsLink() {
   caret.collapse(true);
   sel.removeAllRanges();
   sel.addRange(caret);
+  markDirty();
 }
 
 function handleInlineShortcut(event, block) {
-  if (!editableBlockOf(event.target)) return;
+  if (!editableLineOf(event.target)) return;
   const key = event.key.toLowerCase();
   if (key === "b") {
     event.preventDefault();
@@ -877,17 +1026,25 @@ function handleInlineShortcut(event, block) {
 }
 
 // Paste as plain text only (plaintext-only still accepts styled drops in
-// some engines). Multi-line pastes split into blocks like Enter would.
+// some engines). In prose, multi-line pastes split into blocks like Enter
+// would; inside code and table cells the lines join with newlines as text.
 function onEditPaste(event) {
   if (!editingArmed) return;
-  const block = editableBlockOf(event.target);
-  if (!block || !contentEl.contains(block)) return;
+  const target = event.target;
+  if (!target || !contentEl.contains(target)) return;
+  if (target.closest?.("[contenteditable='false']")) return;
   const text = (event.clipboardData?.getData("text/plain") || "").replace(/\r\n?/g, "\n");
   if (!text) {
     event.preventDefault();
     return;
   }
   event.preventDefault();
+  const block = editableLineOf(target);
+  if (!block) {
+    insertPlainTextAtCaret(text);
+    markDirty();
+    return;
+  }
   const sel = window.getSelection();
   if (!sel.rangeCount) return;
   const range = sel.getRangeAt(0);
@@ -914,12 +1071,26 @@ function onEditPaste(event) {
   caret.collapse(true);
   sel.removeAllRanges();
   sel.addRange(caret);
+  markDirty();
+}
+
+function insertPlainTextAtCaret(text) {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  if (!range.collapsed) range.deleteContents();
+  const node = document.createTextNode(text);
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
 }
 
 function nextBlockFor(current) {
   let tag = current.tagName;
   if (/^H[1-6]$/.test(tag) || tag === "DIV") tag = "P";
-  const next = makeEditable(tag);
+  const next = newBlock(tag);
   if (tag === "LI" && current.classList.contains("task")) {
     next.className = "task";
     next.append(makeTaskCheckbox(false), document.createTextNode(" "));
@@ -927,23 +1098,181 @@ function nextBlockFor(current) {
   return next;
 }
 
-async function saveNow() {
-  if (!editingArmed || !currentPath || saveInFlight) return;
+// --- Inline editing: autosave ---------------------------------------------
+// Saves are explicit events, never a loop: typing (re)arms a single
+// one-shot timer; the timer fires once after a second of quiet and is gone.
+// Conflict freezes autosave until ⌘S forces or Esc reloads.
+
+function markDirty() {
+  if (!editingArmed) return;
+  isDirty = true;
+  editSeq += 1;
+  scheduleAutosave();
+}
+
+function scheduleAutosave() {
+  if (!editingArmed || conflictPending) return;
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => {
+    autosaveTimer = 0;
+    autoSaveNow().catch((error) => showToast(String(error)));
+  }, AUTOSAVE_MS);
+}
+
+async function autoSaveNow() {
+  if (!editingArmed || !isDirty || saveInFlight || !currentPath || conflictPending || isComposing) return;
+  await saveNow();
+}
+
+function flushEdits() {
+  if (!editingArmed || !isDirty || saveInFlight || conflictPending || isComposing) return;
+  clearTimeout(autosaveTimer);
+  autosaveTimer = 0;
+  saveNow().catch((error) => showToast(String(error)));
+}
+
+// --- Inline editing: live conversion --------------------------------------
+// Block prefixes convert in keydown (before the space lands); inline spans
+// convert here, on the delimiter that completes them: typing `**bold** `
+// turns the span bold the moment the trailing space arrives.
+
+function onEditInput(event) {
+  if (!editingArmed) return;
+  markDirty();
+  if (event.isComposing) return;
+  if (event.inputType === "insertText" && typeof event.data === "string" && /[\s.,;:!?)]/.test(event.data)) {
+    tryConvertInline();
+  }
+}
+
+function tryConvertInline() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return false;
+  const node = sel.anchorNode;
+  if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+  const line = editableLineOf(node);
+  if (!line || !contentEl.contains(line)) return false;
+  const offset = sel.anchorOffset;
+  const full = node.nodeValue;
+  // The delimiter that triggered this check (usually the space just typed)
+  // sits before the caret and stays put; patterns match up to it.
+  let core = full.slice(0, offset);
+  let coreEnd = offset;
+  if (/[\s.,;:!?)]$/.test(core)) {
+    core = core.slice(0, -1);
+    coreEnd -= 1;
+  }
+  const before = core;
+  // Text strictly after the caret; the delimiter itself stays in the node
+  // and is re-split out below, so it is never duplicated.
+  const after = full.slice(offset);
+  const patterns = [
+    { re: /\*\*([^*]+)\*\*$/, tag: "STRONG" },
+    { re: /(^|[\s(])\*([^*]+)\*$/, tag: "EM", prefix: 1 },
+    { re: /`([^`]+)`$/, tag: "CODE" },
+    { re: /~~([^~]+)~~$/, tag: "DEL" },
+  ];
+  for (const { re, tag, prefix } of patterns) {
+    const match = before.match(re);
+    if (!match) continue;
+    const inner = match[prefix ? 2 : 1];
+    const start = coreEnd - match[0].length + (prefix ? match[1].length : 0);
+    node.nodeValue = full.slice(0, start) + full.slice(coreEnd);
+    const el = document.createElement(tag);
+    el.textContent = inner;
+    const remainder = document.createTextNode(after);
+    const anchor = splitTextAt(node, start);
+    anchor.before(el, remainder);
+    const caret = document.createRange();
+    caret.setStart(remainder, 0);
+    caret.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(caret);
+    return true;
+  }
+  const link = before.match(/\[([^\]]+)\]\(([^)\s]+)\)$/);
+  if (link) {
+    const start = coreEnd - link[0].length;
+    node.nodeValue = full.slice(0, start) + full.slice(coreEnd);
+    const anchor = document.createElement("a");
+    anchor.setAttribute("href", link[2]);
+    anchor.textContent = link[1];
+    const remainder = document.createTextNode(after);
+    splitTextAt(node, start).before(anchor, remainder);
+    const caret = document.createRange();
+    caret.setStart(remainder, 0);
+    caret.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(caret);
+    return true;
+  }
+  return false;
+}
+
+// Split a text node at offset, returning the node that starts at the split
+// (the right half, or an empty text node when splitting at the very end).
+function splitTextAt(node, offset) {
+  if (offset >= node.nodeValue.length) {
+    const empty = document.createTextNode("");
+    node.after(empty);
+    return empty;
+  }
+  return node.splitText(offset);
+}
+
+async function saveNow(options = {}) {
+  const { force = false } = options;
+  if (!editingArmed || !currentPath || saveInFlight) return false;
   saveInFlight = true;
-  justSavedAt = Date.now();
+  const seq = editSeq;
   const caret = captureCaret();
+  const hadFocus = contentEl.contains(document.activeElement);
   const scroll = document.getElementById("app").scrollTop;
+  // Keep already-rendered diagrams across the re-render so autosave never
+  // makes them flicker; only new or changed fences re-render below.
+  const diagrams = new Map();
+  for (const holder of contentEl.querySelectorAll(".mk-diagram")) {
+    const source = holder.dataset.mermaid || "";
+    if (!diagrams.has(source)) diagrams.set(source, []);
+    diagrams.get(source).push(holder);
+  }
   try {
-    const doc = await api().core.invoke("save_document", {
+    const result = await api().core.invoke("save_document", {
       path: currentPath,
       body: serializeBody(),
+      expected_mtime_ms: lastMtime,
+      force,
     });
-    currentPath = doc.path;
-    isDirty = false;
-    renderDocument(doc, { keepScroll: scroll });
+    currentPath = result.doc.path;
+    lastMtime = result.mtime_ms;
+    justSavedAt = Date.now();
+    // Keystrokes that landed mid-save belong to the next flush, not this one.
+    if (editSeq === seq) isDirty = false;
+    else scheduleAutosave();
+    conflictPending = false;
+    renderDocument(result.doc, { keepScroll: scroll, deferMermaid: true });
+    let freshDiagrams = false;
+    for (const pre of contentEl.querySelectorAll("pre")) {
+      const code = pre.querySelector(":scope > code");
+      if (!code || !/\blanguage-mermaid\b/.test(code.className || "")) continue;
+      const stash = diagrams.get(code.textContent || "");
+      if (stash && stash.length) pre.replaceWith(stash.shift());
+      else freshDiagrams = true;
+    }
+    if (freshDiagrams) renderMermaid(contentEl);
     restoreCaret(caret);
+    if (hadFocus) contentEl.focus({ preventScroll: true });
+    return true;
   } catch (error) {
+    if (String(error).startsWith("CONFLICT")) {
+      conflictPending = true;
+      clearTimeout(autosaveTimer);
+      autosaveTimer = 0;
+      showToast("File changed on disk — ⌘S to overwrite, Esc to load it", { ms: 6000 });
+      return false;
+    }
     showToast(String(error));
+    return false;
   } finally {
     saveInFlight = false;
   }
@@ -951,7 +1280,7 @@ async function saveNow() {
 
 function onContentKeydown(event) {
   if (!editingArmed) return;
-  const block = editableBlockOf(event.target);
+  const block = editableLineOf(event.target);
   if (!block || !contentEl.contains(block)) return;
   if (event.metaKey || event.ctrlKey) {
     handleInlineShortcut(event, block);
@@ -974,26 +1303,56 @@ function onContentKeydown(event) {
   }
 }
 
-// Task boxes stay functional controls while armed: toggle explicitly instead
-// of relying on native behavior inside contenteditable, then save at once.
+// Task boxes toggle explicitly instead of relying on native behavior
+// inside contenteditable; autosave persists the toggle.
 function onContentClick(event) {
   if (!editingArmed) return;
   const box = event.target?.closest?.("li.task > input[type='checkbox']");
   if (!box || !contentEl.contains(box)) return;
   event.preventDefault();
   box.checked = !box.checked;
-  isDirty = true;
-  saveNow().catch((error) => showToast(String(error)));
+  markDirty();
 }
 
-function cancelEditing() {
+// Double-clicking a diagram swaps in its source fence for editing; on save
+// it serializes back to ```mermaid like any other code block.
+function onDiagramDblClick(event) {
+  if (!editingArmed) return;
+  const holder = event.target?.closest?.(".mk-diagram");
+  if (!holder || !contentEl.contains(holder)) return;
+  event.preventDefault();
+  const pre = document.createElement("pre");
+  const code = document.createElement("code");
+  code.className = "language-mermaid";
+  code.textContent = holder.dataset.mermaid || "";
+  pre.append(code);
+  holder.replaceWith(pre);
+  markDirty();
+  const range = document.createRange();
+  range.selectNodeContents(code);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+async function cancelEditing() {
   if (!editingArmed) return;
   if (document.activeElement) document.activeElement.blur();
+  clearTimeout(autosaveTimer);
+  autosaveTimer = 0;
   isDirty = false;
-  contentEl.innerHTML = lastHtml;
-  renderMermaid(contentEl);
-  if (editingEnabled()) armEditing();
-  else disarmEditing();
+  conflictPending = false;
+  try {
+    // Reload from disk (not the stale baseline): Esc is also how a
+    // disk-conflict is resolved toward the outside world.
+    await openPath(currentPath, { skipHistory: true });
+  } catch {
+    contentEl.innerHTML = lastHtml;
+    renderMermaid(contentEl);
+    if (editingEnabled()) armEditing();
+    else disarmEditing();
+  }
   showToast("Edits discarded");
 }
 
@@ -1145,9 +1504,23 @@ async function boot() {
   contentEl.addEventListener("keydown", onContentKeydown);
   contentEl.addEventListener("paste", onEditPaste);
   contentEl.addEventListener("click", onContentClick);
-  contentEl.addEventListener("input", () => {
-    if (editingArmed) isDirty = true;
+  contentEl.addEventListener("dblclick", onDiagramDblClick);
+  contentEl.addEventListener("input", onEditInput);
+  // Re-rendering mid-composition would destroy the IME session, so saves
+  // (auto and flush) wait until composition ends.
+  contentEl.addEventListener("compositionstart", () => {
+    isComposing = true;
   });
+  contentEl.addEventListener("compositionend", () => {
+    isComposing = false;
+    if (editingArmed && isDirty) scheduleAutosave();
+  });
+  // Autosave flushes on the way out too, so a quick close never loses the
+  // last second of typing. Both are plain events; nothing polls.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) flushEdits();
+  });
+  window.addEventListener("blur", () => flushEdits());
   toastEl.addEventListener("click", () => {
     if (toastUrl) api().opener.openUrl(toastUrl);
   });
@@ -1159,7 +1532,8 @@ async function boot() {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       if (editingArmed && settingsEl.hidden) {
         event.preventDefault();
-        saveNow().catch((error) => showToast(String(error)));
+        // A pending conflict makes this the explicit overwrite.
+        saveNow({ force: conflictPending }).catch((error) => showToast(String(error)));
       }
       return;
     }
@@ -1209,7 +1583,11 @@ async function boot() {
     if (path && path === currentPath) {
       if (Date.now() - justSavedAt < 1200) return; // echo of our own save
       if (editingArmed && isDirty) {
-        showToast("File changed on disk — ⌘S to overwrite, Esc to reload", { ms: 5000 });
+        // Freeze autosave until the user decides: ⌘S overwrites, Esc loads.
+        conflictPending = true;
+        clearTimeout(autosaveTimer);
+        autosaveTimer = 0;
+        showToast("File changed on disk — ⌘S to overwrite, Esc to load it", { ms: 6000 });
         return;
       }
       const hash = historyStack[historyIndex]?.hash || "";

@@ -5,7 +5,7 @@ use tauri::Emitter;
 use crate::app::{
     build_menu, copy_current_path, open_document, paths_from_cli_args, paths_from_urls,
     remember_path, reveal_in_finder, save_document, set_always_on_top, set_live_reload,
-    take_pending_path, check_for_update, AppState,
+    take_pending_path, check_for_update, write_document, AppState,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -17,6 +17,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_document,
             save_document,
+            write_document,
             take_pending_path,
             set_live_reload,
             set_always_on_top,

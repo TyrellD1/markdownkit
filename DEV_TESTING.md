@@ -90,8 +90,10 @@ Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, me
 - [ ] Typing `## `, `- `, `1. `, `[] `, `> `, ` ```rust ` turns the line into that block in real time; `**bold** `, `` `code` ``, `[t](u)` convert as you type
 - [ ] `Enter` splits a block; empty list item + `Enter` exits the list; `Tab` indents list items
 - [ ] Clicking a task checkbox toggles it and it is saved automatically
-- [ ] Edits save to disk by themselves after a second of quiet; scroll and caret stay put, diagrams don't flicker
+- [ ] Edits reach the file ~150ms after you stop typing with no re-render, caret jump, or flicker; the file on disk matches what you see
+- [ ] Footnote numbers, fresh diagrams/tables, and explicit `{#ids}` reconcile after ~5s of true idle, keeping caret and scroll
 - [ ] `⌘S` forces an immediate save; `Esc` reverts to the disk version
+- [ ] No stray `\` characters appear after splitting headings or list items and waiting
 - [ ] Code, tables, diagrams, and footnotes are read-only in place and survive a save unchanged (double-click a diagram to edit its source)
 - [ ] `examples/kitchen-sink.md` still renders identically after a no-op save (type a space, delete it, wait a second)
 

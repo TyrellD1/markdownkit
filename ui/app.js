@@ -767,6 +767,7 @@ function wrapLineInList(line, kind, task, checked, rest, offset) {
     li.append(makeTaskCheckbox(checked), document.createTextNode(" "));
   }
   if (rest) li.append(document.createTextNode(rest));
+  else if (!task) li.append(document.createElement("br"));
   list.append(li);
   line.replaceWith(list);
   markDirty();
@@ -861,6 +862,54 @@ function exitListToParagraph(li) {
   return true;
 }
 
+// A bare block marker (`##`, `-`, `1.`, `[]`, `>`) plus Enter converts the
+// line instead of splitting it: with nothing else on the line there is no
+// content to split. Only the exact marker (plus one optional trailing space)
+// matches, so literal prose and pasted markdown stay untouched.
+function convertBareMarkerOnEnter(event, block) {
+  if (!isParagraphLike(block) || block.closest("li")) return false;
+  const text = block.textContent;
+  let match;
+  if ((match = text.match(/^(#{1,6})[ \u00a0]?$/))) {
+    event.preventDefault();
+    const h = newBlock(`h${match[1].length}`);
+    h.append(document.createElement("br"));
+    h.dataset.mkAutoId = "1";
+    block.replaceWith(h);
+    updateAutoHeadingId(h);
+    setCaretAtTextOffset(h, 0);
+    markDirty();
+    return true;
+  }
+  if (/^(-|\*|\+)[ \u00a0]?$/.test(text)) {
+    event.preventDefault();
+    wrapLineInList(block, "UL", false, false, "", 0);
+    return true;
+  }
+  if (/^1\.[ \u00a0]?$/.test(text)) {
+    event.preventDefault();
+    wrapLineInList(block, "OL", false, false, "", 0);
+    return true;
+  }
+  if ((match = text.match(/^(\[\]|\[x\])[ \u00a0]?$/i))) {
+    event.preventDefault();
+    wrapLineInList(block, "UL", true, /x/i.test(match[1]), "", 0);
+    return true;
+  }
+  if (/^>[ \u00a0]?$/.test(text) && !block.closest("blockquote")) {
+    event.preventDefault();
+    const quote = document.createElement("blockquote");
+    const inner = newBlock("p");
+    inner.append(document.createElement("br"));
+    quote.append(inner);
+    block.replaceWith(quote);
+    setCaretAtTextOffset(inner, 0);
+    markDirty();
+    return true;
+  }
+  return false;
+}
+
 function onEnterKey(event, block) {
   if (event.shiftKey) return; // Shift+Enter stays a soft break (<br>)
   if (isParagraphLike(block) && !block.closest("li") && block.textContent.trim() === "---") {
@@ -887,6 +936,9 @@ function onEnterKey(event, block) {
       return;
     }
   }
+  // A lone marker plus Enter converts the line (see helper); anything else
+  // keeps the browser's native split below.
+  if (convertBareMarkerOnEnter(event, block)) return;
   // Let the browser split the block, then normalize the Notion-unlike parts:
   // a heading split at the very end becomes a paragraph, and stray top-level
   // divs become paragraphs.
@@ -1344,6 +1396,7 @@ function tryConvertBlockPrefixLive() {
       // non-empty item keeps its literal text.
       if (rest.trim() !== "" || line.querySelector("ul, ol, input")) return false;
       const h = newBlock(`h${level}`);
+      h.append(document.createElement("br"));
       h.dataset.mkAutoId = "1";
       replaceListItemWithBlock(line, h);
       updateAutoHeadingId(h);
@@ -1357,7 +1410,11 @@ function tryConvertBlockPrefixLive() {
       return false;
     }
     const h = newBlock(`h${level}`);
-    h.textContent = rest;
+    // An empty heading still needs the browser's caret placeholder, or the
+    // caret can fall out of the block in some engines and typing lands
+    // outside the new heading.
+    if (rest) h.textContent = rest;
+    else h.append(document.createElement("br"));
     h.dataset.mkAutoId = "1";
     line.replaceWith(h);
     updateAutoHeadingId(h);
@@ -1383,7 +1440,9 @@ function tryConvertBlockPrefixLive() {
   if ((match = text.match(/^>[ \u00a0]/)) && !line.closest("blockquote")) {
     const quote = document.createElement("blockquote");
     const inner = newBlock("p");
-    inner.textContent = restOf(match);
+    const rest = restOf(match);
+    if (rest) inner.textContent = rest;
+    else inner.append(document.createElement("br"));
     quote.append(inner);
     line.replaceWith(quote);
     setCaretAtTextOffset(inner, caretAfter(match));
@@ -1398,8 +1457,10 @@ function setCaretAtTextOffset(block, offset) {
   const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
   let remaining = Math.max(0, offset);
   let placed = false;
+  let seenText = false;
   let node;
   while ((node = walker.nextNode())) {
+    seenText = true;
     if (node.nodeValue.length >= remaining) {
       range.setStart(node, remaining);
       placed = true;
@@ -1408,8 +1469,15 @@ function setCaretAtTextOffset(block, offset) {
     remaining -= node.nodeValue.length;
   }
   if (!placed) {
-    range.selectNodeContents(block);
-    range.collapse(false);
+    if (seenText) {
+      range.selectNodeContents(block);
+      range.collapse(false);
+    } else {
+      // Fresh empty block: sit before the placeholder <br> so the next
+      // keystroke lands inside the block in every engine.
+      range.setStart(block, 0);
+      range.collapse(true);
+    }
   } else {
     range.collapse(true);
   }

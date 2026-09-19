@@ -306,14 +306,23 @@ function currentDir() {
   return index < 0 ? "" : currentPath.slice(0, index);
 }
 
+// Paths back into markdown stay minimal and relative: same-directory targets
+// keep their bare name, deeper targets keep their subpath, and parents use
+// `..` segments. Absolute paths only survive when no relative form exists
+// (empty base dir), so saves never spray absolute paths into the file.
 function relativize(dir, absolute) {
-  if (!absolute.startsWith("/")) return absolute;
-  if (dir && (absolute === dir || absolute.startsWith(dir + "/"))) {
-    const rest = absolute.slice(dir.length + 1);
-    if (!rest) return ".";
-    return rest.includes("/") ? rest : "./" + rest;
+  if (!absolute.startsWith("/") || !dir) return absolute;
+  const from = dir.split("/").filter((part) => part.length > 0);
+  const to = absolute.split("/").filter((part) => part.length > 0);
+  let shared = 0;
+  while (shared < from.length && shared < to.length && from[shared] === to[shared]) {
+    shared += 1;
   }
-  return absolute;
+  const up = from.length - shared;
+  const down = to.slice(shared);
+  if (up === 0 && down.length === 0) return ".";
+  if (up === 0) return down.join("/");
+  return [...Array(up).fill(".."), ...down].join("/");
 }
 
 function reverseLink(href) {
@@ -372,9 +381,11 @@ function serializeInlineChildren(el) {
 
 // A <br> at the very end of a block is the browser's caret placeholder, not
 // a line break the user typed: serializing it as a hard-break marker would
-// write a literal backslash into the file on the next save.
+// write a literal backslash into the file on the next save. Trailing spaces
+// or tabs after the break (e.g. `<br> `) are placeholder residue too, so the
+// match tolerates them instead of leaving a stray backslash behind.
 function stripTrailingBreak(text) {
-  return text.replace(/(\\\n?)+$/, "");
+  return text.replace(/(\\[ \t]*\n?[ \t]*)+$/, "");
 }
 
 function serializeInlineNode(node) {  if (node.nodeType === Node.TEXT_NODE) return node.nodeValue;

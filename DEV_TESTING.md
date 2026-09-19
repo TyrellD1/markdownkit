@@ -88,6 +88,7 @@ Open `examples/kitchen-sink.md` for headings, tables, tasks, footnotes, code, me
 - [ ] With the setting off, the page is unchanged: no caret, no extra listeners
 - [ ] With it on, clicking any paragraph, heading, list item, or quote puts a caret there and typing works; arrows and clicks move freely across blocks
 - [ ] Typing `## `, `- `, `1. `, `[] `, `> `, ` ```rust ` turns the line into that block in real time; `**bold** `, `` `code` ``, `[t](u)` convert as you type
+- [ ] A lone marker (`##`, `-`, `1.`, `[]`, `>`) plus `Enter` converts the line instead of splitting it
 - [ ] `Enter` splits a block; empty list item + `Enter` exits the list; `Tab` indents list items
 - [ ] Clicking a task checkbox toggles it and it is saved automatically
 - [ ] Edits reach the file ~150ms after you stop typing with no re-render, caret jump, or flicker; the file on disk matches what you see
